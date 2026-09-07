@@ -27,7 +27,7 @@ import {
   type WaterSettings,
   type WaterStats,
 } from './water-engine';
-import { CAPACITY } from './fluid-simulation';
+import { CAPACITY, DEFAULT_COUNT } from './fluid-simulation';
 function Range({
   label,
   value,
@@ -67,7 +67,7 @@ function Range({
 }
 export default function Home() {
   const [settings, setSettings] = useState<WaterSettings>(defaults),
-    [stats, setStats] = useState<WaterStats>({ fps: 0, count: 1700 }),
+    [stats, setStats] = useState<WaterStats>({ fps: 0, count: DEFAULT_COUNT }),
     [preset, setPreset] = useState('平静'),
     [error, setError] = useState(''),
     [ready, setReady] = useState(false),
@@ -155,7 +155,7 @@ export default function Home() {
         <div className="header-right">
           <span className="live-dot" />
           <span>粒子流体</span>
-          <span className="version">WEBGL 2 / 03</span>
+          <span className="version">WEBGL 2 / 04</span>
         </div>
       </header>
       <section className="scene-title">
@@ -176,7 +176,7 @@ export default function Home() {
         <aside className="control-panel">
           <div className="panel-heading">
             <div>
-              <span className="panel-kicker">EXPERIMENT 003</span>
+              <span className="panel-kicker">EXPERIMENT 004</span>
               <h2>自由水流</h2>
             </div>
             <Activity size={19} />
@@ -262,14 +262,14 @@ export default function Home() {
                 </div>
                 <div className="quantity-buttons">
                   <button
-                    aria-label="减少 250 个水粒子"
+                    aria-label="减少 500 个水粒子"
                     disabled={!ready || !!error || stats.count === 0}
                     onClick={() => act('drain')}
                   >
                     <Minus size={15} />
                   </button>
                   <button
-                    aria-label="注入 250 个水粒子"
+                    aria-label="注入 500 个水粒子"
                     disabled={!ready || !!error || stats.count >= CAPACITY}
                     onClick={() => act('pour')}
                   >

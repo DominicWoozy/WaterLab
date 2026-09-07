@@ -1,19 +1,18 @@
 /** A world-space scalar field reconstructed from the physical particles.
  * It is independent of the camera and does not use visible sphere surfaces.
  */
-export const VOLUME_SIZE = [64, 80, 48] as const;
+export const VOLUME_SIZE = [96, 128, 72] as const;
 export const VOLUME_MIN = [-2.08, -1.12, -1.56] as const;
 export const VOLUME_MAX = [2.08, 4.08, 1.56] as const;
 export const SURFACE_DENSITY = 1.15;
 export const ABSORPTION = [1.25, 0.2, 0.065] as const;
-const RADIUS = 0.34;
+const RADIUS = 0.19;
 const STEP = VOLUME_SIZE.map(
   (n, i) => (VOLUME_MAX[i] - VOLUME_MIN[i]) / (n - 1),
 );
 export class FluidVolume {
-  readonly data = new Float32Array(
-    VOLUME_SIZE[0] * VOLUME_SIZE[1] * VOLUME_SIZE[2],
-  );
+  data = new Float32Array(VOLUME_SIZE[0] * VOLUME_SIZE[1] * VOLUME_SIZE[2]);
+  private xSquared = new Float32Array(VOLUME_SIZE[0]);
   top = 0;
   rebuild(positions: Float32Array, count: number, densities?: Float32Array) {
     this.data.fill(0);
@@ -41,6 +40,10 @@ export class FluidVolume {
         nz - 1,
         Math.floor((z + RADIUS - VOLUME_MIN[2]) / sz),
       );
+      for (let ix = x0; ix <= x1; ix++) {
+        const dx = VOLUME_MIN[0] + ix * sx - x;
+        this.xSquared[ix] = (dx * dx) / h2;
+      }
       // Only detached spray needs extra support to survive the grid resolution.
       const weight = densities ? 1 + Math.max(0, 1 - densities[i]) * 0.8 : 1;
       for (let iz = z0; iz <= z1; iz++) {
@@ -51,8 +54,7 @@ export class FluidVolume {
           if (yz2 >= 1) continue;
           let index = nx * (iy + ny * iz) + x0;
           for (let ix = x0; ix <= x1; ix++, index++) {
-            const dx = VOLUME_MIN[0] + ix * sx - x;
-            const q = 1 - yz2 - (dx * dx) / h2;
+            const q = 1 - yz2 - this.xSquared[ix];
             if (q > 0) this.data[index] += q * q * q * weight;
           }
         }

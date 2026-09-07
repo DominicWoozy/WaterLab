@@ -9,9 +9,9 @@ import { ParticleFluid } from '../app/fluid-simulation.ts';
 function slab(layers) {
   const p = [];
   for (let y = 0; y < layers; y++)
-    for (let z = -8; z <= 8; z++)
-      for (let x = -12; x <= 12; x++)
-        p.push(x * 0.14, -0.85 + y * 0.135, z * 0.14);
+    for (let z = -16; z <= 16; z++)
+      for (let x = -24; x <= 24; x++)
+        p.push(x * 0.07, -0.85 + y * 0.09, z * 0.07);
   const volume = new FluidVolume();
   volume.rebuild(new Float32Array(p), p.length / 3);
   return volume;
@@ -27,7 +27,7 @@ function surfaceHeight(volume, x, z) {
   return top;
 }
 test('a flat particle slab reconstructs one smooth surface, without per-particle spherical bumps', () => {
-  const volume = slab(5),
+  const volume = slab(6),
     heights = [];
   for (let z = -0.7; z <= 0.7; z += 0.061)
     for (let x = -1; x <= 1; x += 0.059)
@@ -41,8 +41,8 @@ test('a flat particle slab reconstructs one smooth surface, without per-particle
   assert.ok(min > -0.5);
 });
 test('optical path distinguishes shallow and deep reconstructed water', () => {
-  const shallow = slab(2),
-    deep = slab(7);
+  const shallow = slab(3),
+    deep = slab(10);
   const a = shallow.thickness([0, 1, 0], [0, -1, 0], 2),
     b = deep.thickness([0, 1, 0], [0, -1, 0], 2);
   console.log(

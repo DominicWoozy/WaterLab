@@ -52,7 +52,7 @@ test('released water settles, preserves particle count, and stays finite inside 
     );
     assert.ok(Math.abs(f.positions[i]) <= HALF_X + 0.0001);
     assert.ok(Math.abs(f.positions[i + 2]) <= HALF_Z + 0.0001);
-    assert.ok(f.positions[i + 1] >= FLOOR + 0.0599);
+    assert.ok(f.positions[i + 1] >= FLOOR + 0.0329);
     assert.ok(f.positions[i + 1] <= 3.801);
   }
   assert.ok(Number.isFinite(kinetic(f)));
@@ -111,9 +111,9 @@ test('capacity fluid remains stable under strong stirring, high viscosity and ch
 });
 test('under-dense particles do not attract into a jelly-like clump', () => {
   const f = new ParticleFluid(2);
-  f.positions.set([-0.1, 1, 0, 0.1, 1, 0]);
+  f.positions.set([-0.06, 1, 0, 0.06, 1, 0]);
   f.velocities.fill(0);
   for (let i = 0; i < 60; i++)
     f.step(1 / 120, { gravity: 0, viscosity: 0, agitation: 0 });
-  assert.ok(Math.abs(f.positions[3] - f.positions[0] - 0.2) < 0.00001);
+  assert.ok(Math.abs(f.positions[3] - f.positions[0] - 0.12) < 0.00001);
 });

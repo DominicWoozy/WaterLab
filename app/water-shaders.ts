@@ -33,7 +33,8 @@ void main(){
 export const surfaceFragment = `#version 300 es
 precision highp float;
 in vec2 texcoord;
-uniform highp sampler3D densityVolume;
+uniform highp sampler3D densityVolume, previousVolume;
+uniform float fieldBlend;
 uniform vec3 volumeMin, volumeMax, volumeSize, absorption;
 uniform float volumeTop, isoDensity;
 uniform vec2 resolution;
@@ -47,7 +48,8 @@ float density(vec3 p){
  if(abs(p.x)>1.86||abs(p.z)>1.36||p.y<-.96||p.y>volumeTop)return 0.;
  // Map grid nodes to texel centres: CPU and GPU see the identical scalar field.
  vec3 uv=((p-volumeMin)/(volumeMax-volumeMin)*(volumeSize-1.)+.5)/volumeSize;
- return texture(densityVolume,uv).r;
+ float current=texture(densityVolume,uv).r;
+ return fieldBlend>.999?current:mix(texture(previousVolume,uv).r,current,fieldBlend);
 }
 vec2 boxHit(vec3 ro,vec3 rd){
  vec3 safe=mix(vec3(.00001),rd,greaterThan(abs(rd),vec3(.00001)));
@@ -57,7 +59,7 @@ vec2 boxHit(vec3 ro,vec3 rd){
  return vec2(max(max(lo.x,lo.y),lo.z),min(min(hi.x,hi.y),hi.z));
 }
 vec3 normalAt(vec3 p){
- vec3 e=vec3(.063,0.,0.);
+ vec3 e=vec3(.043,0.,0.);
  vec3 n=vec3(density(p-e.xyy)-density(p+e.xyy),density(p-e.yxy)-density(p+e.yxy),density(p-e.yyx)-density(p+e.yyx));
  return length(n)>.00001?normalize(n):vec3(0.,1.,0.);
 }
@@ -122,10 +124,10 @@ void main(){
  vec2 interval=boxHit(eye,rd);
  float at=max(0.,interval.x),last=at;bool found=false;
  if(particleView<.5&&interval.y>at){
-  for(int i=0;i<190;i++){
+  for(int i=0;i<256;i++){
    float d=density(eye+rd*at);
    if(d>isoDensity){found=true;break;}
-   last=at;at+=d>.12?.0275:.055;
+   last=at;at+=d>.12?.02:.04;
    if(at>interval.y)break;
   }
  }
