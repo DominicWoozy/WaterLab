@@ -155,7 +155,7 @@ export default function Home() {
         <div className="header-right">
           <span className="live-dot" />
           <span>粒子流体</span>
-          <span className="version">WEBGL 2 / 04</span>
+          <span className="version">WEBGL 2 / GPU</span>
         </div>
       </header>
       <section className="scene-title">
@@ -176,7 +176,7 @@ export default function Home() {
         <aside className="control-panel">
           <div className="panel-heading">
             <div>
-              <span className="panel-kicker">EXPERIMENT 004</span>
+              <span className="panel-kicker">EXPERIMENT 005</span>
               <h2>自由水流</h2>
             </div>
             <Activity size={19} />
@@ -323,7 +323,8 @@ export default function Home() {
                 />
               </div>
               <p className="light-note">
-                粒子只计算运动。水面由三维密度场合成，薄水透明，深水随光程逐渐呈青蓝色。
+                粒子运动与水体重建均在 GPU
+                计算。薄水透明，深水随光程逐渐呈青蓝色。
               </p>
             </TabsContent>
           </Tabs>

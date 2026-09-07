@@ -5,8 +5,8 @@ import {
   SURFACE_DENSITY,
   ABSORPTION,
 } from './fluid-volume';
-import { CAPACITY, DEFAULT_COUNT } from './fluid-simulation';
-import type { FluidAction, FluidFrame, FluidJob } from './fluid-runtime';
+import { GpuFluid } from './gpu-fluid';
+import type { FluidAction } from './fluid-runtime';
 import {
   fullscreenVertex,
   particleVertex,
@@ -54,48 +54,9 @@ export function createWater(
   if (!gl)
     throw new Error('水体合成需要 WebGL 2 支持，请启用浏览器硬件加速后重试。');
 
-  const makeVolumeTexture = () => {
-    const texture = gl.createTexture()!;
-    gl.bindTexture(gl.TEXTURE_3D, texture);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    for (const axis of [
-      gl.TEXTURE_WRAP_S,
-      gl.TEXTURE_WRAP_T,
-      gl.TEXTURE_WRAP_R,
-    ])
-      gl.texParameteri(gl.TEXTURE_3D, axis, gl.CLAMP_TO_EDGE);
-    gl.texImage3D(
-      gl.TEXTURE_3D,
-      0,
-      gl.R16F,
-      ...VOLUME_SIZE,
-      0,
-      gl.RED,
-      gl.FLOAT,
-      null,
-    );
-    return texture;
-  };
-  let currentVolume = makeVolumeTexture(),
-    previousVolume = makeVolumeTexture();
-  let simTime = 0,
-    particleCount = DEFAULT_COUNT,
-    volumeTop = 0,
-    previousTop = 0,
-    snapshotTime = 0,
-    snapshotInterval = 33,
-    hasVolume = false;
-  let workerBusy = false,
-    recycleVolume: ArrayBuffer | undefined,
-    recyclePositions: ArrayBuffer | undefined;
-  let lastRequest = 0,
-    lastJobParticles: boolean | null = null,
-    positionsReady = false;
+  const fluid = new GpuFluid(gl);
   const actions: FluidAction[] = [];
-  const worker = new Worker(new URL('./fluid-worker.ts', import.meta.url), {
-    type: 'module',
-  });
+  let lastUpdate = 0;
   const programs: WebGLProgram[] = [];
   const createProgram = (vertex: string, fragment: string) => {
     const program = gl.createProgram()!;
@@ -123,16 +84,9 @@ export function createWater(
   };
   const particles = createProgram(particleVertex, particleFragment),
     surface = createProgram(fullscreenVertex, surfaceFragment);
-  const particleBuffer = gl.createBuffer()!,
-    quadBuffer = gl.createBuffer()!;
+  const quadBuffer = gl.createBuffer()!;
   const particleVAO = gl.createVertexArray()!,
     quadVAOs: WebGLVertexArrayObject[] = [];
-  gl.bindVertexArray(particleVAO);
-  gl.bindBuffer(gl.ARRAY_BUFFER, particleBuffer);
-  gl.bufferData(gl.ARRAY_BUFFER, CAPACITY * 3 * 4, gl.DYNAMIC_DRAW);
-  const position = gl.getAttribLocation(particles, 'position');
-  gl.enableVertexAttribArray(position);
-  gl.vertexAttribPointer(position, 3, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
   gl.bufferData(
     gl.ARRAY_BUFFER,
@@ -245,132 +199,45 @@ export function createWater(
       Math.max(-1.2, Math.min(1.2, c.eye[2] + d[2] * t)),
     ];
   };
-  const submitJob = (now: number) => {
-    if (workerBusy || disposed || lostContext || document.hidden) return;
-    const s = getSettings();
-    if (
-      s.paused &&
-      hasVolume &&
-      actions.length === 0 &&
-      s.particles === lastJobParticles
-    )
-      return;
-    if (lastRequest && now - lastRequest < 16 && actions.length === 0) return;
-    const b = pointer && !pointer.orbit ? pointer : null;
-    const job: FluidJob = {
-      elapsed: lastRequest
-        ? Math.min(0.05, (now - lastRequest) / 1000)
-        : 1 / 60,
-      speed: s.speed,
-      paused: s.paused,
-      forces: {
-        gravity: s.gravity,
-        viscosity: s.viscosity,
-        agitation: s.agitation,
-      },
-      particles: s.particles,
-      brush:
-        b && s.mode !== 'orbit'
-          ? {
-              x: b.world[0],
-              y: b.world[1],
-              z: b.world[2],
-              dx: b.dx,
-              dz: b.dz,
-              strength: s.strength,
-              mode: s.mode,
-            }
-          : undefined,
-      actions: actions.splice(0),
-      recycleVolume,
-      recyclePositions,
-    };
-    const transfers: Transferable[] = [];
-    if (recycleVolume) transfers.push(recycleVolume);
-    if (recyclePositions) transfers.push(recyclePositions);
-    recycleVolume = undefined;
-    recyclePositions = undefined;
-    workerBusy = true;
-    lastRequest = now;
-    lastJobParticles = s.particles;
-    worker.postMessage(job, transfers);
-  };
-  worker.onmessage = (
-    event: MessageEvent<FluidFrame & { type: string; message?: string }>,
-  ) => {
-    workerBusy = false;
-    if (disposed || lostContext) return;
-    const frame = event.data;
-    if (frame.type === 'error') {
-      onError(frame.message || '后台水体计算失败');
-      lostContext = true;
-      return;
-    }
-    const now = performance.now();
-    simTime = frame.time;
-    particleCount = frame.count;
-    if (frame.volume) {
-      const data = new Float32Array(frame.volume);
-      [previousVolume, currentVolume] = [currentVolume, previousVolume];
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_3D, currentVolume);
-      gl.texSubImage3D(
-        gl.TEXTURE_3D,
-        0,
-        0,
-        0,
-        0,
-        ...VOLUME_SIZE,
-        gl.RED,
-        gl.FLOAT,
-        data,
-      );
-      if (!hasVolume) {
-        gl.bindTexture(gl.TEXTURE_3D, previousVolume);
-        gl.texSubImage3D(
-          gl.TEXTURE_3D,
-          0,
-          0,
-          0,
-          0,
-          ...VOLUME_SIZE,
-          gl.RED,
-          gl.FLOAT,
-          data,
-        );
-      }
-      previousTop = hasVolume ? volumeTop : frame.top;
-      volumeTop = frame.top;
-      snapshotInterval = snapshotTime
-        ? Math.max(16, Math.min(100, now - snapshotTime))
-        : 33;
-      snapshotTime = now;
-      hasVolume = true;
-      recycleVolume = frame.volume;
-    }
-    if (frame.positions) {
-      positionsReady = true;
-      gl.bindBuffer(gl.ARRAY_BUFFER, particleBuffer);
-      gl.bufferSubData(
-        gl.ARRAY_BUFFER,
-        0,
-        new Float32Array(frame.positions, 0, frame.count * 3),
-      );
-      recyclePositions = frame.positions;
-    }
-    // Run independently of RAF while leaving the main event loop available for input.
-    if (!getSettings().paused)
-      setTimeout(() => submitJob(performance.now()), 0);
-  };
-  worker.onerror = () => {
-    workerBusy = false;
-    lostContext = true;
-    onError('后台流体线程未能启动，请重新加载页面。');
-  };
   const render = (now: number) => {
     if (disposed || lostContext) return;
     const s = getSettings();
-    submitJob(now);
+    const b = pointer && !pointer.orbit ? pointer : null;
+    try {
+      fluid.update({
+        elapsed: document.hidden
+          ? 0
+          : lastUpdate
+            ? Math.min(0.05, (now - lastUpdate) / 1000)
+            : 1 / 60,
+        speed: s.speed,
+        paused: s.paused || document.hidden,
+        particles: s.particles,
+        forces: {
+          gravity: s.gravity,
+          viscosity: s.viscosity,
+          agitation: s.agitation,
+        },
+        brush:
+          b && s.mode !== 'orbit'
+            ? {
+                x: b.world[0],
+                y: b.world[1],
+                z: b.world[2],
+                dx: b.dx,
+                dz: b.dz,
+                strength: s.strength,
+                mode: s.mode,
+              }
+            : undefined,
+        actions: actions.splice(0),
+      });
+      lastUpdate = now;
+    } catch (error) {
+      lostContext = true;
+      onError(error instanceof Error ? error.message : 'GPU 流体计算失败');
+      return;
+    }
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clear(gl.DEPTH_BUFFER_BIT);
     gl.disable(gl.DEPTH_TEST);
@@ -378,23 +245,17 @@ export function createWater(
     gl.bindVertexArray(quadVAOs[0]);
     cameraUniforms(surface);
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_3D, currentVolume);
+    gl.bindTexture(gl.TEXTURE_2D, fluid.volume);
     gl.uniform1i(uniform(surface, 'densityVolume'), 0);
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_3D, previousVolume);
-    gl.uniform1i(uniform(surface, 'previousVolume'), 1);
-    f(
-      surface,
-      'fieldBlend',
-      Math.min(1, (now - snapshotTime) / snapshotInterval),
-    );
     gl.uniform3fv(uniform(surface, 'volumeMin'), VOLUME_MIN);
     gl.uniform3fv(uniform(surface, 'volumeMax'), VOLUME_MAX);
     gl.uniform3fv(uniform(surface, 'volumeSize'), VOLUME_SIZE);
     gl.uniform3fv(uniform(surface, 'absorption'), ABSORPTION);
-    f(surface, 'volumeTop', Math.max(previousTop, volumeTop));
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, fluid.volumeBounds);
+    gl.uniform1i(uniform(surface, 'waterBounds'), 1);
     f(surface, 'isoDensity', SURFACE_DENSITY);
-    f(surface, 'time', simTime);
+    f(surface, 'time', fluid.time);
     f(surface, 'lightPower', s.light);
     f(surface, 'reflectionOn', +s.reflection);
     f(surface, 'causticsOn', +s.caustics);
@@ -402,22 +263,24 @@ export function createWater(
     f(surface, 'brushOn', +(!!pointer && !pointer.orbit));
     gl.uniform3fv(uniform(surface, 'brush'), pointer?.world || [0, -0.25, 0]);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
-    if (s.particles && positionsReady) {
+    if (s.particles) {
       gl.useProgram(particles);
       cameraUniforms(particles);
       gl.bindVertexArray(particleVAO);
-      gl.bindBuffer(gl.ARRAY_BUFFER, particleBuffer);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, fluid.positions);
+      gl.uniform1i(uniform(particles, 'positions'), 0);
       f(particles, 'radius', 0.021);
       gl.enable(gl.DEPTH_TEST);
       gl.depthFunc(gl.LESS);
-      gl.drawArrays(gl.POINTS, 0, particleCount);
+      gl.drawArrays(gl.POINTS, 0, fluid.count);
       gl.disable(gl.DEPTH_TEST);
     }
     frames++;
     if (now - statTime > 1000) {
       onStats({
         fps: Math.round((frames * 1000) / (now - statTime)),
-        count: particleCount,
+        count: fluid.count,
       });
       const measured = (frames * 1000) / (now - statTime);
       const nextScale =
@@ -569,10 +432,7 @@ export function createWater(
       canvas.removeEventListener('keydown', key);
       canvas.removeEventListener('contextmenu', contextMenu);
       canvas.removeEventListener('webglcontextlost', lost);
-      worker.terminate();
-      gl.deleteTexture(currentVolume);
-      gl.deleteTexture(previousVolume);
-      gl.deleteBuffer(particleBuffer);
+      fluid.destroy();
       gl.deleteBuffer(quadBuffer);
       gl.deleteVertexArray(particleVAO);
       quadVAOs.forEach((v) => gl.deleteVertexArray(v));

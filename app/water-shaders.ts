@@ -4,12 +4,13 @@ out vec2 texcoord;
 void main(){texcoord=position*.5+.5;gl_Position=vec4(position,0.,1.);}`;
 export const particleVertex = `#version 300 es
 precision highp float;
-in vec3 position;
+uniform highp sampler2D positions;
 uniform vec2 resolution;
 uniform vec3 eye, cameraRight, cameraUp, cameraForward;
 uniform float offsetX, radius;
 out float eyeDepth;
 void main(){
+ vec3 position=texelFetch(positions,ivec2(gl_VertexID%128,gl_VertexID/128),0).xyz;
  vec3 p=position-eye;
  float z=dot(p,cameraForward);eyeDepth=z;
  vec2 xy=vec2(dot(p,cameraRight),dot(p,cameraUp));
@@ -33,10 +34,10 @@ void main(){
 export const surfaceFragment = `#version 300 es
 precision highp float;
 in vec2 texcoord;
-uniform highp sampler3D densityVolume, previousVolume;
-uniform float fieldBlend;
+uniform highp sampler2D densityVolume, waterBounds;
 uniform vec3 volumeMin, volumeMax, volumeSize, absorption;
-uniform float volumeTop, isoDensity;
+uniform float isoDensity;
+float volumeTop;
 uniform vec2 resolution;
 uniform vec3 eye,cameraRight,cameraUp,cameraForward;
 uniform float offsetX,time,lightPower,reflectionOn,causticsOn,particleView;
@@ -44,12 +45,16 @@ uniform vec3 brush;
 uniform float brushOn;
 out vec4 fragColor;
 vec3 ray(vec2 uv){vec2 q=(uv-.5)*vec2(resolution.x/resolution.y,1.);q.x+=offsetX;return normalize(cameraForward*1.55+cameraRight*q.x+cameraUp*q.y);}
+float layerDensity(vec2 xy,float z){
+ vec2 tile=vec2(mod(z,8.),floor(z/8.));
+ vec2 node=clamp(xy,vec2(0.),volumeSize.xy-1.);
+ return texture(densityVolume,(tile*volumeSize.xy+node+.5)/vec2(768.,1152.)).r;
+}
 float density(vec3 p){
  if(abs(p.x)>1.86||abs(p.z)>1.36||p.y<-.96||p.y>volumeTop)return 0.;
- // Map grid nodes to texel centres: CPU and GPU see the identical scalar field.
- vec3 uv=((p-volumeMin)/(volumeMax-volumeMin)*(volumeSize-1.)+.5)/volumeSize;
- float current=texture(densityVolume,uv).r;
- return fieldBlend>.999?current:mix(texture(previousVolume,uv).r,current,fieldBlend);
+ vec3 node=(p-volumeMin)/(volumeMax-volumeMin)*(volumeSize-1.);
+ float z=clamp(node.z,0.,71.),layer=floor(z);
+ return mix(layerDensity(node.xy,layer),layerDensity(node.xy,min(layer+1.,71.)),fract(z));
 }
 vec2 boxHit(vec3 ro,vec3 rd){
  vec3 safe=mix(vec3(.00001),rd,greaterThan(abs(rd),vec3(.00001)));
@@ -120,6 +125,7 @@ vec3 scene(vec3 ro,vec3 rd){
  return c;
 }
 void main(){
+ volumeTop=texelFetch(waterBounds,ivec2(0),0).y+.19;
  vec3 rd=ray(texcoord);vec3 color=scene(eye,rd);
  vec2 interval=boxHit(eye,rd);
  float at=max(0.,interval.x),last=at;bool found=false;
