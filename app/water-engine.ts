@@ -1,5 +1,5 @@
+import { GPU_VOLUME_SIZE } from './gpu-volume-config';
 import {
-  VOLUME_SIZE,
   VOLUME_MIN,
   VOLUME_MAX,
   SURFACE_DENSITY,
@@ -249,7 +249,7 @@ export function createWater(
     gl.uniform1i(uniform(surface, 'densityVolume'), 0);
     gl.uniform3fv(uniform(surface, 'volumeMin'), VOLUME_MIN);
     gl.uniform3fv(uniform(surface, 'volumeMax'), VOLUME_MAX);
-    gl.uniform3fv(uniform(surface, 'volumeSize'), VOLUME_SIZE);
+    gl.uniform3fv(uniform(surface, 'volumeSize'), GPU_VOLUME_SIZE);
     gl.uniform3fv(uniform(surface, 'absorption'), ABSORPTION);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, fluid.volumeBounds);

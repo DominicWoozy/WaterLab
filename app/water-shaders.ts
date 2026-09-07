@@ -1,3 +1,4 @@
+import { GPU_ATLAS_SIZE } from './gpu-volume-config.ts';
 export const fullscreenVertex = `#version 300 es
 in vec2 position;
 out vec2 texcoord;
@@ -48,13 +49,13 @@ vec3 ray(vec2 uv){vec2 q=(uv-.5)*vec2(resolution.x/resolution.y,1.);q.x+=offsetX
 float layerDensity(vec2 xy,float z){
  vec2 tile=vec2(mod(z,8.),floor(z/8.));
  vec2 node=clamp(xy,vec2(0.),volumeSize.xy-1.);
- return texture(densityVolume,(tile*volumeSize.xy+node+.5)/vec2(768.,1152.)).r;
+ return texture(densityVolume,(tile*volumeSize.xy+node+.5)/vec2(${GPU_ATLAS_SIZE.map((n) => n.toFixed(1)).join(',')})).r;
 }
 float density(vec3 p){
  if(abs(p.x)>1.86||abs(p.z)>1.36||p.y<-.96||p.y>volumeTop)return 0.;
  vec3 node=(p-volumeMin)/(volumeMax-volumeMin)*(volumeSize-1.);
- float z=clamp(node.z,0.,71.),layer=floor(z);
- return mix(layerDensity(node.xy,layer),layerDensity(node.xy,min(layer+1.,71.)),fract(z));
+ float z=clamp(node.z,0.,volumeSize.z-1.),layer=floor(z);
+ return mix(layerDensity(node.xy,layer),layerDensity(node.xy,min(layer+1.,volumeSize.z-1.)),fract(z));
 }
 vec2 boxHit(vec3 ro,vec3 rd){
  vec3 safe=mix(vec3(.00001),rd,greaterThan(abs(rd),vec3(.00001)));
@@ -64,7 +65,7 @@ vec2 boxHit(vec3 ro,vec3 rd){
  return vec2(max(max(lo.x,lo.y),lo.z),min(min(hi.x,hi.y),hi.z));
 }
 vec3 normalAt(vec3 p){
- vec3 e=vec3(.043,0.,0.);
+ vec3 e=vec3(.022,0.,0.);
  vec3 n=vec3(density(p-e.xyy)-density(p+e.xyy),density(p-e.yxy)-density(p+e.yxy),density(p-e.yyx)-density(p+e.yyx));
  return length(n)>.00001?normalize(n):vec3(0.,1.,0.);
 }
@@ -130,10 +131,10 @@ void main(){
  vec2 interval=boxHit(eye,rd);
  float at=max(0.,interval.x),last=at;bool found=false;
  if(particleView<.5&&interval.y>at){
-  for(int i=0;i<256;i++){
+  for(int i=0;i<384;i++){
    float d=density(eye+rd*at);
    if(d>isoDensity){found=true;break;}
-   last=at;at+=d>.12?.02:.04;
+   last=at;at+=d>.12?.014:.026;
    if(at>interval.y)break;
   }
  }

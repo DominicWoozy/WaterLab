@@ -22,7 +22,7 @@ print('GPU:',G.glGetString(0x1F01).decode(),flush=True)
 for name,result,args in [
  ('glCreateShader',U,[U]),('glShaderSource',None,[U,I,c.POINTER(S),P]),('glCompileShader',None,[U]),('glGetShaderiv',None,[U,U,c.POINTER(I)]),('glGetShaderInfoLog',None,[U,I,P,P]),
  ('glCreateProgram',U,[]),('glAttachShader',None,[U,U]),('glLinkProgram',None,[U]),('glGetProgramiv',None,[U,U,c.POINTER(I)]),('glGetProgramInfoLog',None,[U,I,P,P]),('glUseProgram',None,[U]),
- ('glGenTextures',None,[I,c.POINTER(U)]),('glBindTexture',None,[U,U]),('glTexImage2D',None,[U,I,I,I,I,I,U,U,P]),('glTexParameteri',None,[U,U,I]),
+ ('glGenTextures',None,[I,c.POINTER(U)]),('glBindTexture',None,[U,U]),('glTexImage2D',None,[U,I,I,I,I,I,U,U,P]),('glTexParameteri',None,[U,U,I]),('glTexSubImage2D',None,[U,I,I,I,I,I,U,U,P]),
  ('glGenFramebuffers',None,[I,c.POINTER(U)]),('glBindFramebuffer',None,[U,U]),('glFramebufferTexture2D',None,[U,U,U,U,I]),('glCheckFramebufferStatus',U,[U]),
  ('glViewport',None,[I,I,I,I]),('glGenVertexArrays',None,[I,c.POINTER(U)]),('glBindVertexArray',None,[U]),('glDrawArrays',None,[U,I,I]),('glDrawArraysInstanced',None,[U,I,I,I]),
  ('glActiveTexture',None,[U]),('glGetUniformLocation',I,[U,S]),('glUniform1i',None,[I,I]),('glUniform1f',None,[I,F]),('glUniform2fv',None,[I,I,c.POINTER(F)]),('glUniform3fv',None,[I,I,c.POINTER(F)]),('glUniform4fv',None,[I,I,c.POINTER(F)]),
@@ -60,7 +60,7 @@ def target(w=128,h=128,half=False):
     return (t.value,fb.value,w,h)
 count=10000
 T={name:target() for name in ['pos','pred','corr','vel','veltmp','keys','keytmp','lambda']}
-T['ranges']=target(128,137);T['atlas']=target(768,1152,True)
+T['ranges']=target(128,137);T['atlas']=target(1024,1920,True)
 def run(name,out,inputs={},values={}):
     t=T[out];p=programs[name];G.glBindFramebuffer(0x8D40,t[1]);G.glViewport(0,0,t[2],t[3]);G.glUseProgram(p);G.glDisable(0x0BE2)
     G.glUniform1i(G.glGetUniformLocation(p,b'count'),count)
@@ -73,7 +73,7 @@ def run(name,out,inputs={},values={}):
         elif name2 in ['stage','stride','previousCount']:G.glUniform1i(loc,int(value))
         else:G.glUniform1f(loc,value)
     if name=='volume':
-        G.glClearColor(0,0,0,0);G.glClear(0x4000);G.glEnable(0x0BE2);G.glBlendFunc(1,1);G.glDrawArraysInstanced(4,0,6,count*10);G.glDisable(0x0BE2)
+        G.glClearColor(0,0,0,0);G.glClear(0x4000);G.glEnable(0x0BE2);G.glBlendFunc(1,1);G.glDrawArraysInstanced(4,0,6,count*12);G.glDisable(0x0BE2)
     else:G.glDrawArrays(4,0,3)
     error=G.glGetError();assert error==0,(name,hex(error))
 def read(name):
@@ -125,11 +125,13 @@ assert all(math.isfinite(x) for x in p)
 print('PASS: splash response and GPU particle injection to 12,000',flush=True)
 # Compare actual half-float additive volume against the CPU kernel at grid nodes.
 run('volume','atlas',{'positions':'pos','lambdas':'lambda'});atlas=read('atlas');lam=read('lambda')
-def density_node(x,y,z):return atlas[4*((z//8*128+y)*768+z%8*96+x)]
-for x,y,z in [(48,8,36),(48,73,36),(25,8,30)]:
-    world=[-2.08+x/95*4.16,-1.12+y/127*5.2,-1.56+z/71*3.12];expected=0
+def density_node(x,y,z):return atlas[4*((z//8*160+y)*1024+z%8*128+x)]
+for x,y,z in [(64,11,48),(64,92,48),(33,11,40)]:
+    world=[-2.08+x/127*4.16,-1.12+y/159*5.2,-1.56+z/95*3.12];expected=0
     for i in range(count):
-        r2=sum(((world[j]-p[4*i+j])/.19)**2 for j in range(3))
+        blend=max(0,min(1,(lam[4*i+1]-.15)/1.05));blend=blend*blend*(3-2*blend)
+        radius=.1+(.19-.1)*blend
+        r2=sum(((world[j]-p[4*i+j])/radius)**2 for j in range(3))
         if r2<1:expected+=(1-r2)**3*(1+max(0,1-lam[4*i+1])*.8)
     actual=density_node(x,y,z);assert abs(actual-expected)<max(.02,expected*.025),(actual,expected)
 assert max(atlas[::4])>1.15
@@ -140,6 +142,26 @@ for size in [64,32,16,8,4,2,1]:
 assert abs(read('bounds1')[1]-max(p[4*i+1] for i in range(count)))<.00001
 print('PASS: GPU maximum-height reduction matches particle state',flush=True)
 print('PASS: GPU density atlas agrees with CPU kernel (half-float tolerance)',flush=True)
+# Isolated drops must shrink in world space and remain visible at off-grid positions.
+count=1
+for offset in [0., .25, .5, .75]:
+    pos=(F*(128*128*4))(); pressure=(F*(128*128*4))()
+    px=-2.08+(64+offset)/127*4.16
+    py=-1.12+(50+offset)/159*5.2
+    pz=-1.56+(48+offset)/95*3.12
+    pos[0:4]=[px,py,pz,1.]
+    for name,data in [('pos',pos),('lambda',pressure)]:
+        G.glBindTexture(0x0DE1,T[name][0]);G.glTexSubImage2D(0x0DE1,0,0,0,128,128,0x1908,0x1406,data)
+    run('volume','atlas',{'positions':'pos','lambdas':'lambda'});atlas=read('atlas')
+    wet=[]
+    for z in range(43,54):
+        for y in range(45,56):
+            for x in range(59,70):
+                if density_node(x,y,z)>1.15:
+                    wet.append((-2.08+x/127*4.16,-1.12+y/159*5.2,-1.56+z/95*3.12))
+    assert wet, ('off-grid droplet disappeared',offset)
+    assert max(math.dist((px,py,pz),point) for point in wet)<.04
+print('PASS: small isolated spray remains visible at four sub-voxel offsets, radius < 0.04',flush=True)
 count=0;run('volume','atlas',{'positions':'pos','lambdas':'lambda'});assert max(read('atlas')[::4])==0
 print('PASS: empty volume clears without stale water',flush=True)
 print('All native GPU checks passed.',flush=True)

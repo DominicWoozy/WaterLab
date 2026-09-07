@@ -132,7 +132,7 @@ test('GPU update dispatches full physics, volume and bounds without state readba
   assert.equal(gl.draws.filter((d) => d.name === 'boundsFragment').length, 7);
   assert.equal(
     gl.draws.find((d) => d.name === 'volumeFragment').instances,
-    100000,
+    120000,
   );
   assert.equal(
     gl.draws.find((d) => d.name === 'predictFragment').values.dt,

@@ -1,3 +1,10 @@
+import {
+  GPU_VOLUME_SIZE,
+  GPU_ATLAS_SIZE,
+  GPU_SLICES_PER_PARTICLE,
+  BULK_KERNEL_RADIUS,
+  SPRAY_KERNEL_RADIUS,
+} from './gpu-volume-config.ts';
 /** WebGL 2 fragment-compute passes. Particle state never leaves GPU memory. */
 export const computeVertex = `#version 300 es
 precision highp float;
@@ -116,28 +123,32 @@ void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positi
  ${neighbors('delta+=(readAt(velocities,j).xyz-v)*q*q;')}
  result=vec4(limited(v+delta*(.002+viscosity*.065),12.),0.);
 }`;
-// 72 Z slices in an 8x9 atlas. Each particle emits only the slices its kernel intersects.
+// 96 Z slices in an 8x12 atlas. Each particle emits only the slices its kernel intersects.
 export const volumeVertex = `#version 300 es
 precision highp float;
 precision highp int;
 uniform highp sampler2D positions, lambdas;
 out vec3 local;
 out float weight;
-const vec3 lo=vec3(-2.08,-1.12,-1.56),hi=vec3(2.08,4.08,1.56),size=vec3(96.,128.,72.);
+const vec3 lo=vec3(-2.08,-1.12,-1.56),hi=vec3(2.08,4.08,1.56),size=vec3(${GPU_VOLUME_SIZE.map((n) => n.toFixed(1)).join(',')});
 void main(){
- int i=gl_InstanceID/10,k=gl_InstanceID%10;ivec2 uv=ivec2(i%128,i/128);
+ int i=gl_InstanceID/${GPU_SLICES_PER_PARTICLE},k=gl_InstanceID%${GPU_SLICES_PER_PARTICLE};ivec2 uv=ivec2(i%128,i/128);
  vec3 p=texelFetch(positions,uv,0).xyz;
- int slice=int(ceil((p.z-.19-lo.z)/(hi.z-lo.z)*71.))+k;
+ float rho=texelFetch(lambdas,uv,0).y;
+ float bulk=smoothstep(.15,1.2,rho);
+ // Detached spray gets a smaller support; connected water keeps its broad smooth surface.
+ float radius=mix(${SPRAY_KERNEL_RADIUS.toFixed(3)},${BULK_KERNEL_RADIUS.toFixed(3)},bulk);
+ int slice=int(ceil((p.z-radius-lo.z)/(hi.z-lo.z)*(size.z-1.)))+k;
  vec2 corners[6]=vec2[6](vec2(-1.,-1.),vec2(1.,-1.),vec2(-1.,1.),vec2(-1.,1.),vec2(1.,-1.),vec2(1.,1.));
- vec2 xy=p.xy+corners[gl_VertexID]*.19;
+ vec2 xy=p.xy+corners[gl_VertexID]*radius;
  vec2 node=(xy-lo.xy)/(hi.xy-lo.xy)*(size.xy-1.);
  vec2 tile=vec2(slice%8,slice/8);
  vec2 pixel=tile*size.xy+node+.5;
- gl_Position=vec4(pixel/vec2(768.,1152.)*2.-1.,0.,1.);
- float z=lo.z+float(slice)/71.*(hi.z-lo.z);
- local=vec3(xy-p.xy,z-p.z)/.19;
- weight=1.+max(0.,1.-texelFetch(lambdas,uv,0).y)*.8;
- if(slice<0||slice>=72||abs(z-p.z)>.19)gl_Position=vec4(2.,2.,2.,1.);
+ gl_Position=vec4(pixel/vec2(${GPU_ATLAS_SIZE.map((n) => n.toFixed(1)).join(',')})*2.-1.,0.,1.);
+ float z=lo.z+float(slice)/(size.z-1.)*(hi.z-lo.z);
+ local=vec3(xy-p.xy,z-p.z)/radius;
+ weight=1.+max(0.,1.-rho)*.8;
+ if(slice<0||slice>=int(size.z)||abs(z-p.z)>radius)gl_Position=vec4(2.,2.,2.,1.);
 }`;
 export const volumeFragment = `#version 300 es
 precision highp float;

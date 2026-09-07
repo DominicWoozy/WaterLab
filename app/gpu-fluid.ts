@@ -1,3 +1,7 @@
+import {
+  GPU_ATLAS_SIZE,
+  GPU_SLICES_PER_PARTICLE,
+} from './gpu-volume-config.ts';
 import * as shaders from './gpu-fluid-shaders.ts';
 import type { FluidAction, FluidJob } from './fluid-runtime.ts';
 import { CAPACITY, DEFAULT_COUNT } from './fluid-simulation.ts';
@@ -54,7 +58,7 @@ export class GpuFluid {
       this.keysTemp = this.target();
       this.ranges = this.target(128, 137);
       this.lambda = this.target();
-      this.atlas = this.target(768, 1152, true);
+      this.atlas = this.target(...GPU_ATLAS_SIZE, true);
       for (let size = 64; size >= 1; size /= 2)
         this.bounds.push(this.target(size, size));
       for (const name of [
@@ -208,7 +212,12 @@ export class GpuFluid {
       gl.enable(gl.BLEND);
       gl.blendEquation(gl.FUNC_ADD);
       gl.blendFunc(gl.ONE, gl.ONE);
-      gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, this.count * 10);
+      gl.drawArraysInstanced(
+        gl.TRIANGLES,
+        0,
+        6,
+        this.count * GPU_SLICES_PER_PARTICLE,
+      );
       gl.disable(gl.BLEND);
     } else gl.drawArrays(gl.TRIANGLES, 0, 3);
   }

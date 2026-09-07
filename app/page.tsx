@@ -176,7 +176,7 @@ export default function Home() {
         <aside className="control-panel">
           <div className="panel-heading">
             <div>
-              <span className="panel-kicker">EXPERIMENT 005</span>
+              <span className="panel-kicker">EXPERIMENT 006</span>
               <h2>自由水流</h2>
             </div>
             <Activity size={19} />
