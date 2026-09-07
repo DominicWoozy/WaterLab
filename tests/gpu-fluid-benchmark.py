@@ -13,7 +13,7 @@ def timed(name,fn):
 raw_run=run
 
 def run(name,out,inputs={},values={}):
-    if name in ['key','sort','ranges']:return raw_run(name,out,inputs,values)
+    if name in ['key','sort','sortMerge','ranges']:return raw_run(name,out,inputs,values)
     return timed(name,lambda:raw_run(name,out,inputs,values))
 raw_grid=grid
 

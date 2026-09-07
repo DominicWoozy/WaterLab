@@ -90,6 +90,22 @@ void main(){int i=id(),j=i^stride;vec4 a=readAt(sortedKeys,i),b=readAt(sortedKey
  bool less=a.x<b.x||(a.x==b.x&&a.y<b.y);
  bool ascending=(i&stage)==0;bool lower=(i&stride)==0;
  result=(less==(ascending==lower))?a:b;}`;
+/** Fuse the final stride 4/2/1 of a bitonic stage into registers. */
+export const sortMergeFragment =
+  common +
+  `
+uniform int stage;
+out vec4 result;
+vec4 choose(vec4 a,vec4 b,bool lower){bool less=a.x<b.x||(a.x==b.x&&a.y<b.y);return less==lower?a:b;}
+void main(){
+ int i=id();bool ascending=(i&stage)==0;
+ bool low4=ascending==((i&4)==0),low2=ascending==((i&2)==0),low1=ascending==((i&1)==0);
+ vec4 a=choose(readAt(sortedKeys,i),readAt(sortedKeys,i^4),low4);
+ vec4 b=choose(readAt(sortedKeys,i^1),readAt(sortedKeys,i^5),low4);
+ vec4 c=choose(readAt(sortedKeys,i^2),readAt(sortedKeys,i^6),low4);
+ vec4 d=choose(readAt(sortedKeys,i^3),readAt(sortedKeys,i^7),low4);
+ result=choose(choose(a,c,low2),choose(b,d,low2),low1);
+}`;
 export const rangesFragment =
   common +
   `

@@ -10,9 +10,12 @@ function recordingGL(floatSupport = true) {
     framebuffer;
   const draws = [],
     deleted = [];
+  const counters = { scalarWrites: 0, programBinds: 0, viewportWrites: 0 };
+  let viewport;
   const gl = {
     draws,
     deleted,
+    counters,
     getExtension: () => (floatSupport ? {} : null),
     createTexture: () => ({ id: serial++ }),
     createFramebuffer: () => ({ id: serial++ }),
@@ -34,6 +37,7 @@ function recordingGL(floatSupport = true) {
     getProgramInfoLog: () => '',
     useProgram: (p) => {
       current = p;
+      counters.programBinds++;
     },
     getUniformLocation: (p, name) => ({ p, name }),
     bindFramebuffer: (_, f) => {
@@ -52,7 +56,10 @@ function recordingGL(floatSupport = true) {
     clearColor() {},
     clear() {},
     activeTexture() {},
-    viewport() {},
+    viewport(...value) {
+      viewport = value;
+      counters.viewportWrites++;
+    },
     bindVertexArray() {},
     disable() {},
     enable() {},
@@ -72,13 +79,14 @@ function recordingGL(floatSupport = true) {
   ])
     gl[name] = (loc, value) => {
       loc.p.values[loc.name] = value;
+      if (name === 'uniform1i' || name === 'uniform1f') counters.scalarWrites++;
     };
   const record = (instances) => {
     const name = Object.entries(shaders).find(
       ([key, source]) =>
         key.endsWith('Fragment') && source === current.sources[1],
     )?.[0];
-    draws.push({ name, instances, values: { ...current.values } });
+    draws.push({ name, instances, values: { ...current.values }, viewport });
   };
   gl.drawArrays = () => record(1);
   gl.drawArraysInstanced = (_a, _b, _c, instances) => record(instances);
@@ -128,7 +136,12 @@ test('GPU update dispatches full physics, volume and bounds without state readba
   gl.draws.length = 0;
   fluid.update(job());
   assert.equal(fluid.count, 15000);
-  assert.equal(gl.draws.filter((d) => d.name === 'sortFragment').length, 105);
+  assert.equal(
+    gl.draws.filter((d) =>
+      ['sortFragment', 'sortMergeFragment'].includes(d.name),
+    ).length,
+    81,
+  );
   assert.equal(gl.draws.filter((d) => d.name === 'correctFragment').length, 3);
   assert.equal(gl.draws.filter((d) => d.name === 'boundsFragment').length, 8);
   assert.equal(
@@ -198,7 +211,7 @@ test('GPU actions retain count limits, staged injection, reset, and fixed timest
   assert.equal(fluid.time, 0);
   gl.draws.length = 0;
   fluid.update(job({ elapsed: 10, speed: 2 }));
-  assert.equal(gl.draws.filter((d) => d.name === 'predictFragment').length, 3);
+  assert.equal(gl.draws.filter((d) => d.name === 'predictFragment').length, 1);
 });
 
 test('unsupported GPU reports a capability error instead of silently reverting to CPU', () => {
@@ -212,7 +225,12 @@ test('30,000 quality uses full sort range; switching back resets scale and resto
     job({ actions: [{ type: 'quality', count: 30000 }], paused: true }),
   );
   assert.equal(fluid.count, 30000);
-  assert.equal(gl.draws.filter((d) => d.name === 'sortFragment').length, 120);
+  assert.equal(
+    gl.draws.filter((d) =>
+      ['sortFragment', 'sortMergeFragment'].includes(d.name),
+    ).length,
+    94,
+  );
   const shape = gl.draws.find((d) => d.name === 'geometryFragment');
   assert.ok(shape);
   assert.ok(Math.abs(shape.values.particleScale - Math.cbrt(1 / 3)) < 1e-9);
@@ -221,7 +239,12 @@ test('30,000 quality uses full sort range; switching back resets scale and resto
     job({ actions: [{ type: 'quality', count: 15000 }], paused: true }),
   );
   assert.equal(fluid.count, 15000);
-  assert.equal(gl.draws.filter((d) => d.name === 'sortFragment').length, 105);
+  assert.equal(
+    gl.draws.filter((d) =>
+      ['sortFragment', 'sortMergeFragment'].includes(d.name),
+    ).length,
+    81,
+  );
 });
 
 test('spatial reorder survives odd iterations, pause/drain, and quality changes without state aliasing', () => {
@@ -252,4 +275,48 @@ test('spatial reorder survives odd iterations, pause/drain, and quality changes 
   );
   for (let frame = 0; frame < 10; frame++) fluid.update(job());
   assert.equal(fluid.count, 15000);
+});
+
+test('slow frames do not amplify GPU load; fast frames retain speed control', () => {
+  const gl = recordingGL(),
+    fluid = new GpuFluid(gl);
+  for (let frame = 0; frame < 120; frame++) {
+    gl.draws.length = 0;
+    fluid.update(job({ elapsed: 1 / 30, particles: true }));
+    const steps = gl.draws.filter((d) => d.name === 'predictFragment');
+    assert.equal(steps.length, 1);
+    assert.equal(steps[0].values.dt, 1 / 60);
+  }
+  assert.ok(Math.abs(fluid.time - 2) < 1e-8);
+  assert.equal(fluid.count, 15000);
+  gl.draws.length = 0;
+  fluid.update(job({ elapsed: 1 / 60, speed: 2, particles: true }));
+  assert.equal(gl.draws.filter((d) => d.name === 'predictFragment').length, 2);
+  gl.draws.length = 0;
+  fluid.update(job({ paused: true, elapsed: 5, particles: true }));
+  fluid.update(job({ elapsed: 1 / 60, particles: true }));
+  assert.equal(gl.draws.filter((d) => d.name === 'predictFragment').length, 1);
+});
+
+test('compute caches redundant GL submissions and restores state after scene rendering', () => {
+  const gl = recordingGL(),
+    fluid = new GpuFluid(gl);
+  fluid.update(
+    job({ actions: [{ type: 'quality', count: 30000 }], particles: true }),
+  );
+  gl.useProgram({ sources: [], values: {} });
+  gl.viewport(0, 0, 1234, 567);
+  for (const key of Object.keys(gl.counters)) gl.counters[key] = 0;
+  gl.draws.length = 0;
+  fluid.update(job({ particles: true }));
+  assert.equal(gl.draws[0].name, 'predictFragment');
+  assert.deepEqual(gl.draws[0].viewport, [0, 0, 256, 118]);
+  assert.ok(
+    gl.draws
+      .filter((d) => d.name.startsWith('sort'))
+      .every((d) => d.viewport[3] === 128),
+  );
+  assert.ok(gl.counters.scalarWrites < 180, JSON.stringify(gl.counters));
+  assert.ok(gl.counters.programBinds < 50, JSON.stringify(gl.counters));
+  assert.ok(gl.counters.viewportWrites < 12, JSON.stringify(gl.counters));
 });

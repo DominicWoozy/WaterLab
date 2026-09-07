@@ -48,7 +48,7 @@ def compile_program(v,f):
         log=c.create_string_buffer(10000);G.glGetProgramInfoLog(program,10000,None,log);raise AssertionError(log.value.decode())
     return program
 programs={}
-for name in ['surfaceFilter','divergenceFactor','divergenceResidual','divergenceProject','neighborProbe','reorder','geometry','bounds','initialize','predict','key','sort','ranges','lambda','correct','velocity','viscosity','volume']:
+for name in ['surfaceFilter','divergenceFactor','divergenceResidual','divergenceProject','neighborProbe','reorder','geometry','bounds','initialize','predict','key','sort','sortMerge','ranges','lambda','correct','velocity','viscosity','volume']:
     programs[name]=compile_program(sources['volumeVertex' if name=='volume' else 'computeVertex'],sources[name+'Fragment'])
 compile_program(sources['fullscreenVertex'],sources['surfaceFragment'])
 compile_program(sources['particleVertex'],sources['particleFragment'])
@@ -80,7 +80,7 @@ def run(name,out,inputs={},values={}):
     G.glUniform1i(G.glGetUniformLocation(p,b'initialCount'),quality)
     G.glUniform1i(G.glGetUniformLocation(p,b'sortCount'),sort_count)
     G.glUniform1f(G.glGetUniformLocation(p,b'particleScale'),scale)
-    if name in ['key','sort']:G.glViewport(0,0,256,sort_count//256)
+    if name in ['key','sort','sortMerge']:G.glViewport(0,0,256,sort_count//256)
     elif name in ['predict','lambda','correct','velocity','viscosity','geometry','reorder','divergenceFactor','divergenceResidual','divergenceProject']:G.glViewport(0,0,256,max(1,math.ceil(count/256)))
     for unit,(uniform,tex) in enumerate(inputs.items()):
         assert T[tex]!=t
@@ -110,7 +110,7 @@ def grid(p):
     while stage<=sort_count:
         stride=stage//2
         while stride:
-            run('sort','keytmp',{'sortedKeys':'keys'},{'stage':stage,'stride':stride});T['keys'],T['keytmp']=T['keytmp'],T['keys'];stride//=2
+            run('sortMerge' if stride==4 else 'sort','keytmp',{'sortedKeys':'keys'},{'stage':stage,'stride':stride});T['keys'],T['keytmp']=T['keytmp'],T['keys'];stride=0 if stride==4 else stride//2
         stage*=2
     run('ranges','ranges',{'sortedKeys':'keys'})
 

@@ -29,6 +29,11 @@ export class GpuFluid {
   private gl: WebGL2RenderingContext;
   private targets: Target[] = [];
   private programs = new Map<string, WebGLProgram>();
+  private scalarValues = new Map<WebGLProgram, Map<string, number>>();
+  private activeProgram: WebGLProgram | null = null;
+  private viewportWidth = 0;
+  private viewportHeight = 0;
+  private computeActive = false;
   private uniforms = new Map<
     WebGLProgram,
     Map<string, WebGLUniformLocation | null>
@@ -110,6 +115,7 @@ export class GpuFluid {
         'predict',
         'key',
         'sort',
+        'sortMerge',
         'ranges',
         'lambda',
         'correct',
@@ -246,44 +252,55 @@ export class GpuFluid {
       'geometry',
       'reorder',
     ].includes(name);
-    const sortPass = name === 'key' || name === 'sort';
-    gl.viewport(
-      0,
-      0,
-      target.width,
-      particlePass
-        ? Math.max(1, Math.ceil(this.count / PARTICLE_WIDTH))
-        : sortPass
-          ? this.sortCount / PARTICLE_WIDTH
-          : target.height,
-    );
-    gl.bindVertexArray(this.vao);
-    gl.useProgram(program);
-    gl.disable(gl.DEPTH_TEST);
-    gl.disable(gl.BLEND);
+    const sortPass = name === 'key' || name === 'sort' || name === 'sortMerge';
+    const height = particlePass
+      ? Math.max(1, Math.ceil(this.count / PARTICLE_WIDTH))
+      : sortPass
+        ? this.sortCount / PARTICLE_WIDTH
+        : target.height;
+    if (target.width !== this.viewportWidth || height !== this.viewportHeight) {
+      gl.viewport(0, 0, target.width, height);
+      this.viewportWidth = target.width;
+      this.viewportHeight = height;
+    }
+    if (!this.computeActive) {
+      gl.bindVertexArray(this.vao);
+      gl.disable(gl.DEPTH_TEST);
+      gl.disable(gl.BLEND);
+      this.computeActive = true;
+    }
+    if (program !== this.activeProgram) {
+      gl.useProgram(program);
+      this.activeProgram = program;
+    }
+    let valuesCache = this.scalarValues.get(program);
+    if (!valuesCache) this.scalarValues.set(program, (valuesCache = new Map()));
+    const scalar = (name: string, value: number, integer = false) => {
+      if (valuesCache.get(name) === value) return;
+      valuesCache.set(name, value);
+      const location = this.location(program, name);
+      if (integer) gl.uniform1i(location, value);
+      else gl.uniform1f(location, value);
+    };
     let unit = 0;
     for (const [key, input] of Object.entries(inputs)) {
       if (input === target) throw new Error('GPU 流体缓冲读写冲突');
       gl.activeTexture(gl.TEXTURE0 + unit);
       gl.bindTexture(gl.TEXTURE_2D, input.texture);
-      gl.uniform1i(this.location(program, key), unit++);
+      scalar(key, unit++, true);
     }
-    gl.uniform1i(this.location(program, 'count'), this.count);
-    gl.uniform1f(
-      this.location(program, 'particleScale'),
-      Math.cbrt(10000 / this.quality),
-    );
-    gl.uniform1i(this.location(program, 'sortCount'), this.sortCount);
-    gl.uniform1i(this.location(program, 'initialCount'), this.quality);
+    scalar('count', this.count, true);
+    scalar('particleScale', Math.cbrt(10000 / this.quality));
+    scalar('sortCount', this.sortCount, true);
+    scalar('initialCount', this.quality, true);
     for (const [key, value] of Object.entries(values)) {
       const location = this.location(program, key);
       if (Array.isArray(value)) {
         if (value.length === 2) gl.uniform2fv(location, value);
         if (value.length === 3) gl.uniform3fv(location, value);
         if (value.length === 4) gl.uniform4fv(location, value);
-      } else if (['stage', 'stride', 'previousCount'].includes(key))
-        gl.uniform1i(location, value);
-      else gl.uniform1f(location, value);
+      } else
+        scalar(key, value, ['stage', 'stride', 'previousCount'].includes(key));
     }
     if (name === 'volume') {
       gl.clearColor(0, 0, 0, 0);
@@ -324,12 +341,13 @@ export class GpuFluid {
     for (let stage = 2; stage <= this.sortCount; stage *= 2)
       for (let stride = stage / 2; stride >= 1; stride /= 2) {
         this.run(
-          'sort',
+          stride === 4 ? 'sortMerge' : 'sort',
           this.keysTemp,
           { sortedKeys: this.keys },
           { stage, stride },
         );
         [this.keys, this.keysTemp] = [this.keysTemp, this.keys];
+        if (stride === 4) break;
       }
     this.run('ranges', this.ranges, { sortedKeys: this.keys });
   }
@@ -395,11 +413,19 @@ export class GpuFluid {
       'elapsed' | 'speed' | 'paused' | 'forces' | 'brush' | 'particles'
     > & { actions: GpuFluidAction[] },
   ) {
+    // The scene renderer shares the context. Invalidate only GL state at this
+    // boundary; uniforms belong to our own programs and persist across frames.
+    this.activeProgram = null;
+    this.computeActive = false;
+    this.viewportWidth = this.viewportHeight = 0;
     for (const action of job.actions) this.action(action);
+    // A slow frame must not trigger three expensive catch-up steps and make
+    // the next frame slower again. Keep the stable dt; discard excess backlog.
+    const stepBudget = job.elapsed > 1 / 45 ? 1 : 2;
     if (job.paused) this.accumulator = 0;
     else
       this.accumulator = Math.min(
-        0.05,
+        stepBudget / 60,
         this.accumulator + Math.max(0, Math.min(0.1, job.elapsed)) * job.speed,
       );
     while (this.accumulator + 1e-8 >= 1 / 60) {
