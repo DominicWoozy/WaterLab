@@ -46,6 +46,9 @@ export class GpuFluid {
   private atlas: Target;
   private bounds: Target[] = [];
   private geometry: Target[] = [];
+  private sortedPosition: Target;
+  private sortedOld: Target;
+  private sortedVelocity: Target;
   private accumulator = 0;
   private pendingPour = 0;
   private pourAt = [-0.7, 0];
@@ -63,6 +66,9 @@ export class GpuFluid {
     try {
       this.position = this.target();
       this.predicted = this.target();
+      this.sortedPosition = this.target();
+      this.sortedOld = this.target();
+      this.sortedVelocity = this.target();
       this.correction = this.target();
       this.velocity = this.target();
       this.velocityTemp = this.target();
@@ -91,6 +97,7 @@ export class GpuFluid {
       if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
         throw new Error('当前设备无法创建水面重建缓冲。');
       for (const name of [
+        'reorder',
         'geometry',
         'bounds',
         'initialize',
@@ -224,6 +231,7 @@ export class GpuFluid {
       'velocity',
       'viscosity',
       'geometry',
+      'reorder',
     ].includes(name);
     const sortPass = name === 'key' || name === 'sort';
     gl.viewport(
@@ -312,6 +320,62 @@ export class GpuFluid {
       }
     this.run('ranges', this.ranges, { sortedKeys: this.keys });
   }
+  private reorderState(predicted: boolean, previousCount: number) {
+    const gl = this.gl;
+    const source = predicted ? this.predicted : this.position;
+    const outputs = [this.sortedPosition, this.sortedOld, this.sortedVelocity];
+    // Targets rotate with ping-pong state, so configure and restore MRT attachments per pass.
+    if (
+      outputs.some((target) =>
+        [source, this.position, this.velocity].includes(target),
+      )
+    )
+      throw new Error('GPU 重排缓冲读写冲突');
+    gl.bindFramebuffer(gl.FRAMEBUFFER, outputs[0].framebuffer);
+    outputs
+      .slice(1)
+      .forEach((target, i) =>
+        gl.framebufferTexture2D(
+          gl.FRAMEBUFFER,
+          gl.COLOR_ATTACHMENT0 + i + 1,
+          gl.TEXTURE_2D,
+          target.texture,
+          0,
+        ),
+      );
+    gl.drawBuffers(outputs.map((_, i) => gl.COLOR_ATTACHMENT0 + i));
+    this.run(
+      'reorder',
+      outputs[0],
+      {
+        positions: source,
+        oldPositions: this.position,
+        velocities: this.velocity,
+        sortedKeys: this.keys,
+      },
+      { previousCount },
+    );
+    for (let i = 1; i < 3; i++)
+      gl.framebufferTexture2D(
+        gl.FRAMEBUFFER,
+        gl.COLOR_ATTACHMENT0 + i,
+        gl.TEXTURE_2D,
+        null,
+        0,
+      );
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+    if (predicted)
+      [this.predicted, this.sortedPosition] = [
+        this.sortedPosition,
+        this.predicted,
+      ];
+    else
+      [this.position, this.sortedPosition] = [
+        this.sortedPosition,
+        this.position,
+      ];
+    [this.velocity, this.sortedVelocity] = [this.sortedVelocity, this.velocity];
+  }
   update(
     job: Pick<
       FluidJob,
@@ -358,6 +422,7 @@ export class GpuFluid {
       );
       this.splash = [0, 0, 0];
       this.buildGrid(this.predicted);
+      this.reorderState(true, previousCount);
       const neighborInputs = { sortedKeys: this.keys, cellRanges: this.ranges };
       for (
         let iteration = 0;
@@ -378,7 +443,7 @@ export class GpuFluid {
       this.run(
         'velocity',
         this.velocityTemp,
-        { positions: this.predicted, oldPositions: this.position },
+        { positions: this.predicted, oldPositions: this.sortedOld },
         { dt: 1 / 60, previousCount },
       );
       this.run(
@@ -400,6 +465,7 @@ export class GpuFluid {
     if (this.dirty && !job.particles) {
       if (this.densityDirty) {
         this.buildGrid(this.position);
+        this.reorderState(false, this.count);
         this.densityDirty = false;
       }
       this.run('geometry', this.geometry[0], {

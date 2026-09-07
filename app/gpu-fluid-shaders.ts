@@ -78,15 +78,37 @@ uniform int sortCount;
 out vec4 result;
 int lowerBound(float k){int lo=0,hi=sortCount;for(int n=0;n<16;n++){if(lo>=hi)break;int m=(lo+hi)/2;if(readAt(sortedKeys,m).x<k)lo=m+1;else hi=m;}return lo;}
 void main(){int k=id();result=vec4(float(lowerBound(float(k))),float(lowerBound(float(k+1))),0.,0.);}`;
+/** Spatially reorder all coupled state together (Green 2010 / Hoetzlein 2014).
+ * New-particle tags follow the permutation, rather than assuming new slots stay at the end. */
+export const reorderFragment =
+  common +
+  `
+uniform int previousCount;
+layout(location=0) out vec4 nextPosition;
+layout(location=1) out vec4 previousPosition;
+layout(location=2) out vec4 nextVelocity;
+void main(){
+ int i=id();if(i>=count){nextPosition=vec4(0.);previousPosition=vec4(0.);nextVelocity=vec4(0.);return;}
+ int j=int(readAt(sortedKeys,i).y);
+ nextPosition=readAt(positions,j);
+ previousPosition=vec4(readAt(oldPositions,j).xyz,j<previousCount?1.:0.);
+ nextVelocity=readAt(velocities,j);
+}`;
 // Ranges contain every particle in a cell: no fixed neighbour bucket or overflow truncation.
 const neighbors = (body: string) => `
  ivec3 base=cell(p);
  for(int z=-1;z<=1;z++)for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++){
   ivec3 c=base+ivec3(x,y,z);if(any(lessThan(c,ivec3(0)))||any(greaterThan(c,ivec3(31,39,23))))continue;
+  // A neighbour may have moved by at most three correction clamps since grid build.
+  // Use that conservative reach so culling cannot drop a valid corrected neighbour.
+  vec3 lo=vec3(-2.04,-1.19,-1.53)+vec3(c)*(.225*particleScale);
+  vec3 hi=lo+vec3(.225*particleScale);
+  vec3 gap=max(max(lo-p,p-hi),vec3(0.));
+  if(dot(gap,gap)>pow(H+.051*particleScale,2.))continue;
   vec2 range=readAt(cellRanges,key(c)).xy;
   for(int at=int(range.x);at<int(range.y);at++){
-   int j=int(readAt(sortedKeys,at).y);if(j==i)continue;
-   vec3 d=p-readAt(positions,j).xyz;float r=length(d);if(r>=H||r<.000001)continue;
+   int j=at;if(j==i)continue;
+   vec3 d=p-readAt(positions,j).xyz;float r2=dot(d,d);if(r2>=H*H||r2<1e-12)continue;float r=sqrt(r2);
    float q=1.-r/H;vec3 gradient=(2.*q/(H*REST*r))*d;
    ${body}
   }
@@ -118,7 +140,7 @@ uniform int previousCount;
 out vec4 result;
 void main(){int i=id();if(i>=count){result=vec4(0.);return;}
  vec3 v=(readAt(positions,i).xyz-readAt(oldPositions,i).xyz)/dt;
- if(i>=previousCount)v=vec3(0.,-1.4,0.);
+ if(readAt(oldPositions,i).w<.5)v=vec3(0.,-1.4,0.);
  result=vec4(limited(v,12.)*.998,0.);}`;
 export const viscosityFragment =
   common +
@@ -154,7 +176,7 @@ void main(){
  cov/=pow(max(determinant(cov),1e-8),1./3.);
  mat3 metric=inverse(cov);
  center=vec4(p+limited(mean*.55*confidence,.025*particleScale),rho);
- metric0=vec4(metric[0],0.);metric1=vec4(metric[1],0.);metric2=vec4(metric[2],0.);
+ metric0=vec4(metric[0],sqrt(cov[0][0]));metric1=vec4(metric[1],sqrt(cov[1][1]));metric2=vec4(metric[2],sqrt(cov[2][2]));
 }
 `;
 // 96 Z slices in an 8x12 atlas. Each particle emits only the slices its kernel intersects.
@@ -170,12 +192,13 @@ const vec3 lo=vec3(-2.08,-1.12,-1.56),hi=vec3(2.08,4.08,1.56),size=vec3(${GPU_VO
 void main(){
  int i=gl_InstanceID/${GPU_SLICES_PER_PARTICLE},k=gl_InstanceID%${GPU_SLICES_PER_PARTICLE};ivec2 uv=ivec2(i%${PARTICLE_WIDTH},i/${PARTICLE_WIDTH});
  vec4 center=texelFetch(positions,uv,0);vec3 p=center.xyz;float rho=center.w;
- metric=mat3(texelFetch(metric0,uv,0).xyz,texelFetch(metric1,uv,0).xyz,texelFetch(metric2,uv,0).xyz);
+ vec4 m0=texelFetch(metric0,uv,0),m1=texelFetch(metric1,uv,0),m2=texelFetch(metric2,uv,0);
+ metric=mat3(m0.xyz,m1.xyz,m2.xyz);
  float bulk=smoothstep(.15,1.2,rho);
  // Detached spray gets a smaller support; connected water keeps its broad smooth surface.
  float radius=max(.095,mix(${SPRAY_KERNEL_RADIUS.toFixed(3)},${BULK_KERNEL_RADIUS.toFixed(3)},bulk)*particleScale);
- mat3 shape=inverse(metric);
- vec3 extent=radius*sqrt(vec3(shape[0][0],shape[1][1],shape[2][2]));
+ // Bounds were computed once per particle, rather than in all 120 splat vertices.
+ vec3 extent=radius*vec3(m0.w,m1.w,m2.w);
  int slice=int(ceil((p.z-extent.z-lo.z)/(hi.z-lo.z)*(size.z-1.)))+k;
  vec2 corners[6]=vec2[6](vec2(-1.,-1.),vec2(1.,-1.),vec2(-1.,1.),vec2(-1.,1.),vec2(1.,-1.),vec2(1.,1.));
  vec2 xy=p.xy+corners[gl_VertexID]*extent.xy;

@@ -208,3 +208,33 @@ test('30,000 quality uses full sort range; switching back resets scale and resto
   assert.equal(fluid.count, 15000);
   assert.equal(gl.draws.filter((d) => d.name === 'sortFragment').length, 105);
 });
+
+test('spatial reorder survives odd iterations, pause/drain, and quality changes without state aliasing', () => {
+  const gl = recordingGL(),
+    fluid = new GpuFluid(gl);
+  fluid.update(
+    job({ actions: [{ type: 'quality', count: 30000 }], paused: true }),
+  );
+  for (let frame = 0; frame < 40; frame++) {
+    gl.draws.length = 0;
+    fluid.update(job());
+    assert.equal(
+      gl.draws.filter((d) => d.name === 'reorderFragment').length,
+      1,
+    );
+    assert.equal(
+      gl.draws.filter((d) => d.name === 'correctFragment').length,
+      3,
+    );
+  }
+  fluid.update(
+    job({ actions: [{ type: 'drain', amount: 500 }], paused: true }),
+  );
+  fluid.update(job({ actions: [{ type: 'pour', amount: 500 }] }));
+  assert.equal(fluid.count, 29518);
+  fluid.update(
+    job({ actions: [{ type: 'quality', count: 15000 }], paused: true }),
+  );
+  for (let frame = 0; frame < 10; frame++) fluid.update(job());
+  assert.equal(fluid.count, 15000);
+});

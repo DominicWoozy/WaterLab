@@ -9,6 +9,8 @@ if sys.platform != 'darwin':
     print('SKIP: native GPU harness requires macOS'); sys.exit(0)
 root = Path(__file__).resolve().parents[1]
 sources = json.loads(subprocess.check_output(['node', '--input-type=module', '-e', "import * as s from './app/gpu-fluid-shaders.ts'; import * as w from './app/water-shaders.ts'; console.log(JSON.stringify({...s,...w}));"], cwd=root))
+# Compile the production traversal with only its reduction changed to count/moment.
+sources['neighborProbeFragment']=sources['lambdaFragment'].replace('rho+=q*q; grad+=gradient; sum+=dot(gradient,gradient);','rho+=1.;grad+=d;').replace('result=vec4(-max(rho/REST-1.,0.)/(sum+dot(grad,grad)+2.),rho,0.,0.);','result=vec4(grad,rho);')
 G = c.CDLL('/System/Library/Frameworks/OpenGL.framework/OpenGL')
 def api(name, result, *args):
     f = getattr(G, name); f.restype = result; f.argtypes = args; return f
@@ -43,7 +45,7 @@ def compile_program(v,f):
         log=c.create_string_buffer(10000);G.glGetProgramInfoLog(program,10000,None,log);raise AssertionError(log.value.decode())
     return program
 programs={}
-for name in ['geometry','bounds','initialize','predict','key','sort','ranges','lambda','correct','velocity','viscosity','volume']:
+for name in ['neighborProbe','reorder','geometry','bounds','initialize','predict','key','sort','ranges','lambda','correct','velocity','viscosity','volume']:
     programs[name]=compile_program(sources['volumeVertex' if name=='volume' else 'computeVertex'],sources[name+'Fragment'])
 compile_program(sources['fullscreenVertex'],sources['surfaceFragment'])
 compile_program(sources['particleVertex'],sources['particleFragment'])
@@ -62,7 +64,7 @@ quality=int(sys.argv[1]) if len(sys.argv)>1 else 15000
 count=quality
 scale=(10000/quality)**(1/3)
 sort_count=16384 if count<=16384 else 32768
-T={name:target() for name in ['pos','pred','corr','vel','veltmp','keys','keytmp','lambda','geometry','metric0','metric1','metric2']}
+T={name:target() for name in ['pos','pred','corr','vel','veltmp','keys','keytmp','lambda','geometry','metric0','metric1','metric2','sortpos','sortold','sortvel']}
 T['ranges']=target(256,120);T['atlas']=target(1024,1920,True)
 G.glBindFramebuffer(0x8D40,T['geometry'][1])
 for attachment,name in enumerate(['metric0','metric1','metric2'],1):G.glFramebufferTexture2D(0x8D40,0x8CE0+attachment,0x0DE1,T[name][0],0)
@@ -75,7 +77,7 @@ def run(name,out,inputs={},values={}):
     G.glUniform1i(G.glGetUniformLocation(p,b'sortCount'),sort_count)
     G.glUniform1f(G.glGetUniformLocation(p,b'particleScale'),scale)
     if name in ['key','sort']:G.glViewport(0,0,256,sort_count//256)
-    elif name in ['predict','lambda','correct','velocity','viscosity','geometry']:G.glViewport(0,0,256,max(1,math.ceil(count/256)))
+    elif name in ['predict','lambda','correct','velocity','viscosity','geometry','reorder']:G.glViewport(0,0,256,max(1,math.ceil(count/256)))
     for unit,(uniform,tex) in enumerate(inputs.items()):
         assert T[tex]!=t
         G.glActiveTexture(0x84C0+unit);G.glBindTexture(0x0DE1,T[tex][0]);G.glUniform1i(G.glGetUniformLocation(p,uniform.encode()),unit)
@@ -103,12 +105,23 @@ def grid(p):
         stage*=2
     run('ranges','ranges',{'sortedKeys':'keys'})
 
+def reorder(predicted,previous):
+    source='pred' if predicted else 'pos'
+    G.glBindFramebuffer(0x8D40,T['sortpos'][1])
+    for attachment,name in enumerate(['sortold','sortvel'],1):G.glFramebufferTexture2D(0x8D40,0x8CE0+attachment,0x0DE1,T[name][0],0)
+    G.glDrawBuffers(3,(U*3)(0x8CE0,0x8CE1,0x8CE2))
+    run('reorder','sortpos',{'positions':source,'oldPositions':'pos','velocities':'vel','sortedKeys':'keys'},{'previousCount':previous})
+    for attachment in [1,2]:G.glFramebufferTexture2D(0x8D40,0x8CE0+attachment,0x0DE1,0,0)
+    G.glDrawBuffers(1,(U*1)(0x8CE0))
+    T[source],T['sortpos']=T['sortpos'],T[source]
+    T['vel'],T['sortvel']=T['sortvel'],T['vel']
+
 def step(t=0,gravity=9.8,splash=(0,0,0),previous=None):
     run('predict','pred',{'positions':'pos','velocities':'vel'},{'dt':1/60,'time':t,'gravity':gravity,'agitation':0,'shake':0,'previousCount':count if previous is None else previous,'brush':[0,0,0,0],'brushVelocity':[0,0],'pourAt':[0,0],'splash':splash})
-    grid('pred');ni={'sortedKeys':'keys','cellRanges':'ranges'}
+    grid('pred');reorder(True,count if previous is None else previous);ni={'sortedKeys':'keys','cellRanges':'ranges'}
     for _ in range(3 if quality==30000 else 2):
         run('lambda','lambda',{'positions':'pred',**ni});run('correct','corr',{'positions':'pred','lambdas':'lambda',**ni});T['pred'],T['corr']=T['corr'],T['pred']
-    run('velocity','veltmp',{'positions':'pred','oldPositions':'pos'},{'dt':1/60,'previousCount':count if previous is None else previous})
+    run('velocity','veltmp',{'positions':'pred','oldPositions':'sortold'},{'dt':1/60,'previousCount':count if previous is None else previous})
     run('viscosity','vel',{'positions':'pred','velocities':'veltmp',**ni},{'viscosity':.025});T['pos'],T['pred']=T['pred'],T['pos']
 run('initialize','pos');initial=read('pos');assert sum(initial[4*i+3]>.5 for i in range(32768))==quality
 assert len({tuple(initial[4*i:4*i+3]) for i in range(count)})==quality
@@ -135,11 +148,11 @@ for i in range(30):step(2+i/60)
 for i in range(112):
     previous=count;count=min(30000,quality+2000,count+18);step(3+i/60,previous=previous)
 p=read('pos');
-if quality<30000:assert all(p[4*i+1]>1.7 for i in range(count-2,count))
+if quality<30000:assert sum(p[4*i+1]>1.7 for i in range(count))>=2
 assert all(math.isfinite(x) for x in p)
 print('PASS: splash response and capacity/injection', count,flush=True)
 # Compare actual half-float additive volume against the CPU kernel at grid nodes.
-grid('pos');run('geometry','geometry',{'positions':'pos','sortedKeys':'keys','cellRanges':'ranges'})
+grid('pos');reorder(False,count);run('geometry','geometry',{'positions':'pos','sortedKeys':'keys','cellRanges':'ranges'})
 run('volume','atlas',volume_inputs);atlas=read('atlas');geo=read('geometry');metrics=[read('metric'+str(i)) for i in range(3)]
 def density_node(x,y,z):return atlas[4*((z//8*160+y)*1024+z%8*128+x)]
 for x,y,z in [(64,11,48),(64,92,48),(33,11,40)]:
@@ -169,7 +182,7 @@ for offset in [0., .25, .5, .75]:
     pos[0:4]=[px,py,pz,1.]
     for name,data in [('pos',pos),('lambda',pressure)]:
         G.glBindTexture(0x0DE1,T[name][0]);G.glTexSubImage2D(0x0DE1,0,0,0,256,128,0x1908,0x1406,data)
-    grid('pos');run('geometry','geometry',{'positions':'pos','sortedKeys':'keys','cellRanges':'ranges'})
+    grid('pos');reorder(False,count);run('geometry','geometry',{'positions':'pos','sortedKeys':'keys','cellRanges':'ranges'})
     run('volume','atlas',volume_inputs);atlas=read('atlas')
     wet=[]
     for z in range(43,54):
@@ -186,7 +199,7 @@ jitter=(F*(256*128*4))(*initial)
 for i in range(count):jitter[4*i+1]+=.012*math.sin(i*17.3)
 def upload(name,data):
     G.glBindTexture(0x0DE1,T[name][0]);G.glTexSubImage2D(0x0DE1,0,0,0,256,128,0x1908,0x1406,data)
-upload('pos',jitter);grid('pos');run('geometry','geometry',{'positions':'pos','sortedKeys':'keys','cellRanges':'ranges'})
+upload('pos',jitter);grid('pos');reorder(False,count);run('geometry','geometry',{'positions':'pos','sortedKeys':'keys','cellRanges':'ranges'})
 shape=read('geometry');tensor=[read('metric'+str(i)) for i in range(3)]
 for i in range(count):
     m=[[tensor[col][4*i+row] for col in range(3)] for row in range(3)]
@@ -215,11 +228,12 @@ def surface_rms():
     mean=sum(heights)/len(heights)
     return math.sqrt(sum((h-mean)**2 for h in heights)/len(heights))
 anisotropic=surface_rms()
+jitter=(F*(256*128*4))(*read('pos'))
 for i in range(count):jitter[4*i+3]=shape[4*i+3]
 upload('geometry',jitter)
 for col in range(3):
     identity=(F*(256*128*4))()
-    for i in range(count):identity[4*i+col]=1
+    for i in range(count):identity[4*i+col]=1;identity[4*i+3]=1
     upload('metric'+str(col),identity)
 run('volume','atlas',volume_inputs);atlas=read('atlas');isotropic=surface_rms()
 print('Surface RMS: isotropic %.3f mm, covariance %.3f mm'%(isotropic*1000,anisotropic*1000),flush=True)
@@ -228,4 +242,37 @@ assert anisotropic<max(.0002,isotropic*.9),(anisotropic,isotropic)
 print('PASS: positive definite volume-preserving tensors and bounded surface noise',flush=True)
 count=0;run('volume','atlas',volume_inputs);assert max(read('atlas')[::4])==0
 print('PASS: empty volume clears without stale water',flush=True)
+# Reorder permutation preserves correlated state; newborn tags survive arbitrary permutation.
+import random
+rng=random.Random(71);count=400;previous=380
+state=(F*(256*128*4))();velocity=(F*(256*128*4))()
+for i in range(count):
+    state[4*i:4*i+4]=[rng.uniform(-.5,.5),rng.uniform(-.8,.2),rng.uniform(-.5,.5),1]
+    velocity[4*i:4*i+4]=[i*.001,-i*.002,i*.003,float(i)]
+upload('pos',state);upload('vel',velocity);grid('pos');indices=read('keys');reorder(False,previous)
+ordered=read('pos');ordered_vel=read('vel');old=read('sortold')
+for i in range(count):
+    j=int(indices[4*i+1]);assert list(ordered[4*i:4*i+4])==list(state[4*j:4*j+4])
+    assert list(ordered_vel[4*i:4*i+4])==list(velocity[4*j:4*j+4])
+    assert old[4*i+3]==int(j<previous)
+print('PASS: state permutation and newborn tags remain aligned',flush=True)
+# Move every neighbour up to the full correction budget without rebuilding the grid.
+for i in range(count):
+    d=[rng.uniform(-1,1) for _ in range(3)];length=math.sqrt(sum(v*v for v in d))
+    for axis in range(3):ordered[4*i+axis]+=d[axis]/length*.051*scale
+upload('pos',ordered);run('neighborProbe','lambda',{'positions':'pos','cellRanges':'ranges'})
+probe=read('lambda');hits=0
+for i in range(count):
+    total=[0.,0.,0.];n=0
+    for j in range(count):
+        if i==j:continue
+        d=[ordered[4*i+k]-ordered[4*j+k] for k in range(3)];r2=sum(v*v for v in d)
+        if 1e-12<r2<(.17*scale)**2:
+            n+=1
+            for k in range(3):total[k]+=d[k]
+    assert probe[4*i+3]==n,(i,probe[4*i+3],n)
+    assert all(abs(probe[4*i+k]-total[k])<1e-5 for k in range(3))
+    hits+=n
+assert hits>200
+print('PASS: culled direct traversal matches brute force after maximum corrections',hits,'neighbours',flush=True)
 print('All native GPU checks passed.',flush=True)
