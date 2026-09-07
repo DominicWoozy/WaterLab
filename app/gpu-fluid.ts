@@ -437,11 +437,9 @@ export class GpuFluid {
       this.buildGrid(this.predicted);
       this.reorderState(true, previousCount);
       const neighborInputs = { sortedKeys: this.keys, cellRanges: this.ranges };
-      for (
-        let iteration = 0;
-        iteration < (this.quality === 30000 ? 3 : 2);
-        iteration++
-      ) {
+      // Solid support adds constraints at the floor and walls; both quality
+      // levels need three density iterations to keep compression controlled.
+      for (let iteration = 0; iteration < 3; iteration++) {
         this.run('lambda', this.lambda, {
           positions: this.predicted,
           ...neighborInputs,

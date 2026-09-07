@@ -129,7 +129,7 @@ test('GPU update dispatches full physics, volume and bounds without state readba
   fluid.update(job());
   assert.equal(fluid.count, 15000);
   assert.equal(gl.draws.filter((d) => d.name === 'sortFragment').length, 105);
-  assert.equal(gl.draws.filter((d) => d.name === 'correctFragment').length, 2);
+  assert.equal(gl.draws.filter((d) => d.name === 'correctFragment').length, 3);
   assert.equal(gl.draws.filter((d) => d.name === 'boundsFragment').length, 8);
   assert.equal(
     gl.draws.filter((d) => d.name === 'divergenceFactorFragment').length,

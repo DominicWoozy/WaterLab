@@ -26,6 +26,25 @@ ivec3 cell(vec3 p){return clamp(ivec3(floor((p-vec3(-2.04,-1.19,-1.53))/(.225*pa
 int key(ivec3 c){return c.x+32*(c.y+40*c.z);}
 vec3 bound(vec3 p){return clamp(p,vec3(-1.78,-.917,-1.28),vec3(1.78,3.8,1.28));}
 vec3 limited(vec3 v,float m){return v*min(1.,m/max(length(v),.000001));}
+// Integrate the normalized (1-r/H)^2 kernel over the solid half-space.
+// Return -gradient of normalized boundary density, and density in REST units.
+// Fixed walls contribute to the constraint gradient, but have no movable mass.
+vec4 wallSupport(vec3 p){
+ vec3 distancesLo=p-vec3(-1.78,-.917,-1.28),distancesHi=vec3(1.78,3.8,1.28)-p;
+ float solid=0.;vec3 gradient=vec3(0.);
+ for(int side=0;side<6;side++){
+  int axis=side%3;bool lower=side<3;
+  float a=clamp((lower?distancesLo[axis]:distancesHi[axis])/H,0.,1.);
+  float a2=a*a,a3=a2*a,a4=a3*a,a5=a4*a;
+  float cap=.5-1.25*a+2.5*a3-2.5*a4+.75*a5;
+  float slope=(1.25-7.5*a2+10.*a3-3.75*a4)/H;
+  vec3 n=vec3(0.);n[axis]=lower?1.:-1.;
+  // Approximate the union at corners instead of double-counting solid support.
+  gradient=gradient*(1.-cap)+n*slope*(1.-solid);
+  solid+=cap*(1.-solid);
+ }
+ return vec4(gradient,solid*REST);
+}
 `;
 export const initializeFragment =
   common +
@@ -119,7 +138,7 @@ export const lambdaFragment =
   `
 out vec4 result;
 void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positions,i).xyz;
- float rho=0.,sum=0.;vec3 grad=vec3(0.);
+ vec4 wall=wallSupport(p);float rho=wall.w,sum=0.;vec3 grad=wall.xyz;
  ${neighbors('rho+=q*q; grad+=gradient; sum+=dot(gradient,gradient);')}
  result=vec4(-max(rho/REST-1.,0.)/(sum+dot(grad,grad)+2.),rho,0.,0.);
 }`;
@@ -128,7 +147,7 @@ export const correctFragment =
   `
 out vec4 result;
 void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positions,i).xyz;
- float lambda=readAt(lambdas,i).x;vec3 delta=vec3(0.);
+ float lambda=readAt(lambdas,i).x;vec3 delta=-lambda*wallSupport(p).xyz;
  ${neighbors('delta-=(lambda+readAt(lambdas,j).x)*gradient;')}
  result=vec4(bound(p+limited(delta,.017*particleScale)),1.);
 }`;
@@ -159,7 +178,7 @@ export const divergenceFactorFragment =
   `
 out vec4 result;
 void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positions,i).xyz;
- float rho=0.,sum=0.,nearby=0.;vec3 grad=vec3(0.);
+ vec4 wall=wallSupport(p);float rho=wall.w,sum=0.,nearby=0.;vec3 grad=wall.xyz;
  ${neighbors('rho+=q*q;grad+=gradient;sum+=dot(gradient,gradient);nearby+=1.;')}
  // Sparse ballistic spray has no reliable divergence estimate.
  float factor=nearby>=12.&&rho>REST*.4?1./max(sum+dot(grad,grad),1e-6):0.;
@@ -171,7 +190,7 @@ export const divergenceResidualFragment =
 uniform sampler2D factors;
 out vec4 result;
 void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positions,i).xyz,v=readAt(velocities,i).xyz;
- float rate=0.;
+ float rate=-dot(v,wallSupport(p).xyz);
  ${neighbors('rate+=dot(readAt(velocities,j).xyz-v,gradient);')}
  vec4 f=readAt(factors,i);
  result=vec4(max(rate,0.)*f.x,rate,f.y,0.);
@@ -181,7 +200,7 @@ export const divergenceProjectFragment =
   `
 out vec4 result;
 void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positions,i).xyz,v=readAt(velocities,i).xyz;
- float pressure=readAt(lambdas,i).x;vec3 delta=vec3(0.);
+ float pressure=readAt(lambdas,i).x;vec3 delta=pressure*wallSupport(p).xyz;
  ${neighbors('delta+=(pressure+readAt(lambdas,j).x)*gradient;')}
  // Relaxed Jacobi, with a non-penetrating slip boundary after projection.
  v=limited(v+.5*delta,12.);

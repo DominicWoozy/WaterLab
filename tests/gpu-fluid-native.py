@@ -9,8 +9,11 @@ if sys.platform != 'darwin':
     print('SKIP: native GPU harness requires macOS'); sys.exit(0)
 root = Path(__file__).resolve().parents[1]
 sources = json.loads(subprocess.check_output(['node', '--input-type=module', '-e', "import * as s from './app/gpu-fluid-shaders.ts'; import * as w from './app/water-shaders.ts'; console.log(JSON.stringify({...s,...w}));"], cwd=root))
+# Test-only comparison switch; the app always includes solid boundary support.
+if '--without-wall-support' in sys.argv:
+    sources={k:re.sub(r'vec4 wallSupport\(vec3 p\)\{.*?\n\}', 'vec4 wallSupport(vec3 p){return vec4(0.);}', v, flags=re.S) for k,v in sources.items()}
 # Compile the production traversal with only its reduction changed to count/moment.
-sources['neighborProbeFragment']=sources['lambdaFragment'].replace('rho+=q*q; grad+=gradient; sum+=dot(gradient,gradient);','rho+=1.;grad+=d;').replace('result=vec4(-max(rho/REST-1.,0.)/(sum+dot(grad,grad)+2.),rho,0.,0.);','result=vec4(grad,rho);')
+sources['neighborProbeFragment']=sources['lambdaFragment'].replace('rho+=q*q; grad+=gradient; sum+=dot(gradient,gradient);','rho+=1.;grad+=d;').replace('vec4 wall=wallSupport(p);float rho=wall.w,sum=0.;vec3 grad=wall.xyz;','float rho=0.,sum=0.;vec3 grad=vec3(0.);').replace('result=vec4(-max(rho/REST-1.,0.)/(sum+dot(grad,grad)+2.),rho,0.,0.);','result=vec4(grad,rho);')
 G = c.CDLL('/System/Library/Frameworks/OpenGL.framework/OpenGL')
 def api(name, result, *args):
     f = getattr(G, name); f.restype = result; f.argtypes = args; return f
@@ -125,7 +128,7 @@ def reorder(predicted,previous):
 def step(t=0,gravity=9.8,splash=(0,0,0),previous=None,projection=True):
     run('predict','pred',{'positions':'pos','velocities':'vel'},{'dt':1/60,'time':t,'gravity':gravity,'agitation':0,'shake':0,'previousCount':count if previous is None else previous,'brush':[0,0,0,0],'brushVelocity':[0,0],'pourAt':[0,0],'splash':splash})
     grid('pred');reorder(True,count if previous is None else previous);ni={'sortedKeys':'keys','cellRanges':'ranges'}
-    for _ in range(3 if quality==30000 else 2):
+    for _ in range(3):
         run('lambda','lambda',{'positions':'pred',**ni});run('correct','corr',{'positions':'pred','lambdas':'lambda',**ni});T['pred'],T['corr']=T['corr'],T['pred']
     run('velocity','veltmp',{'positions':'pred','oldPositions':'sortold'},{'dt':1/60,'previousCount':count if previous is None else previous})
     run('viscosity','vel',{'positions':'pred','velocities':'veltmp',**ni},{'viscosity':.025})
@@ -292,7 +295,8 @@ assert hits>200
 print('PASS: culled direct traversal matches brute force after maximum corrections',hits,'neighbours',flush=True)
 # Projection should remove compression, not indiscriminately damp moving water.
 count=quality;state=(F*(256*128*4))(*initial)
-for i in range(count):state[i*4+1]+=.6
+for i in range(count):
+    state[i*4+1]+=.6;state[i*4]*=.7;state[i*4+2]*=.7
 upload('pos',state);grid('pos');reorder(False,count);state=read('pos')
 ni={'positions':'pos','cellRanges':'ranges'}
 run('divergenceFactor','factor',ni)
