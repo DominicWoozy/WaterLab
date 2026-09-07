@@ -24,22 +24,34 @@ node --test tests/fluid-simulation.test.mjs
 
 ## 模拟
 
-`app/fluid-simulation.ts` 保存每个粒子的位置与速度。在固定 1/120 秒的子步中施加重力和用户外力，通过空间网格查找相邻粒子，使用双密度松弛施加成对对称的位置修正，再处理容器边界碰撞、重建速度并施加相邻速度平滑黏性。
+`app/fluid-simulation.ts` 保存每个粒子的位置与速度。固定 1/120 秒子步，空间网格查找邻居，压缩约束、重力、碰撞和相邻速度平滑共同计算运动。压力仅在密度过大时推开粒子，去掉会让水黏成团的负压吸引；默认低黏性，从平静水层开始。
 
-初始 1700 粒子从一列水柱释放，落下并在容器内扩散。平静/涌动/翻涌预设施加不同的整体外力；不是在渲染中移动纹理。
+采用双密度松弛框架的压缩部分，没有弹性弹簧。算法背景：[Clavet、Beaudoin 与 Poulin (2005)](https://diglib.eg.org/items/7cad7994-b781-40ce-ad04-0bf61dc94279)。
 
-算法参考：[Clavet、Beaudoin 与 Poulin，Particle-based Viscoelastic Fluid Simulation (2005)](https://diglib.eg.org/items/7cad7994-b781-40ce-ad04-0bf61dc94279)。采用流体压力部分，没有实现论文的弹性弹簧。
+## 连续水体重建
 
-## 渲染
+**粒子只负责物理，正常视图不绘制粒子小球。**
 
-`app/water-engine.ts` 使用原生 WebGL 2 绘制球形粒子深度，累积厚度，再通过多次深度双边平滑重建连续水面。`app/water-shaders.ts` 从平滑深度重建法线，计算 Fresnel 反射、折射、随厚度变化的吸光和程序化天空照明。
+`app/fluid-volume.ts` 将粒子以平滑核重建为 64 × 80 × 48 的三维浮点密度场。`app/water-shaders.ts` 在该密度场中寻找等值面并从场梯度计算平滑法线。水面属于三维水体，旋转观察不会改变重建结果；粒子小球只在“查看物理粒子（调试）”中显示。
 
-渲染方法参考：[Simon Green / NVIDIA，Screen Space Fluid Rendering for Games](https://developer.download.nvidia.com/presentations/2010/gdc/Direct3D_Effects.pdf)。
+这一做法遵循粒子密度场与隐式自由表面重建思路，参考 [Müller 等，Particle-Based Fluid Simulation for Interactive Applications](https://matthias-research.github.io/pages/publications/sca03.pdf)。实现使用等值面光线步进，不生成 Marching Cubes 网格。
 
-这是有限粒子分辨率下的交互流体近似。边界为固定容器，晃动通过惯性力近似；水面平滑、体积厚度、焦散和反射环境为实时图形近似，不等同于工程级水动力学仿真。粒子运动在 CPU 计算，表面重建及光学着色在 GPU 完成。需要 WebGL 2 和 EXT_color_buffer_float，帧率依设备而异。
+## 按水体厚度吸光
+
+折射光线穿过密度场时，累积实际位于重建水体内部的路径长度，再按 `T = exp(-absorption * opticalPath)` 分别计算 RGB 透过率。红光衰减较快：薄层接近无色透明，较长水中路径呈青蓝色。不再使用会饱和的 8 位粒子亮度叠加估计厚度，也没有为所有水体叠加固定的青色底色。
+
+水体形态、厚度、法线来自同一个三维密度场。仍保留 Fresnel 环境反射、折射、水底棋盘透视与较弱的动态焦散近似。
+
+## 范围与验证
+
+这是有限分辨率的实时流体近似，非工程级仿真。压力约束可压缩，喷溅中孤立粒子有用于可见性的小尺度核补偿；体素重建不是严格保体积算法。固定容器、程序化环境和焦散为近似，折射按单次入射方向积分，没有求解多次界面折射或多重散射。
+
+物理与密度场在 CPU 更新，GPU 通过 WebGL 2 渲染三维密度纹理；不再需要浮点帧缓冲扩展。帧率取决于设备。
+
+```sh
+node --test tests/fluid-simulation.test.mjs tests/fluid-volume.test.mjs
+```
+
+检查覆盖重力与零重力、数量上限、碰撞边界、搅水响应、重置、强扰动稳定性、无外力时不产生粒子吸引、平面重建平整度、静水表面波动、空场、三维位置跟随和厚度相关的透光率。浏览器视觉效果未进行自动化测试。
 
 可选 WebMCP 工具仅在支持 `document.modelContext` 的环境注册；当前环境没有提供该 API 的专门验证上下文。
-
-## 验证范围
-
-自动检查覆盖重力下落、零重力、粒子数量守恒、注水/排水上限、边界约束、搅水响应、重置、最大粒子量强扰动下的数值稳定性及非法时间步。浏览器交互与视觉效果未进行自动化测试。

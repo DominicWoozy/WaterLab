@@ -1,9 +1,16 @@
+import {
+  FluidVolume,
+  VOLUME_SIZE,
+  VOLUME_MIN,
+  VOLUME_MAX,
+  SURFACE_DENSITY,
+  ABSORPTION,
+} from './fluid-volume';
 import { ParticleFluid } from './fluid-simulation';
 import {
   fullscreenVertex,
   particleVertex,
   particleFragment,
-  blurFragment,
   surfaceFragment,
 } from './water-shaders';
 export type WaterSettings = {
@@ -22,9 +29,9 @@ export type WaterSettings = {
 export const defaults: WaterSettings = {
   strength: 1,
   speed: 1,
-  viscosity: 0.12,
+  viscosity: 0.025,
   gravity: 9.8,
-  agitation: 0.4,
+  agitation: 0,
   light: 1.3,
   reflection: true,
   caustics: true,
@@ -44,11 +51,28 @@ export function createWater(
     antialias: false,
     powerPreference: 'high-performance',
   });
-  if (!gl || !gl.getExtension('EXT_color_buffer_float'))
-    throw new Error(
-      '粒子水面需要 WebGL 2 和浮点渲染支持，请启用浏览器硬件加速后重试。',
-    );
+  if (!gl)
+    throw new Error('水体合成需要 WebGL 2 支持，请启用浏览器硬件加速后重试。');
   const fluid = new ParticleFluid();
+  const volume = new FluidVolume();
+  const volumeTexture = gl.createTexture()!;
+  gl.bindTexture(gl.TEXTURE_3D, volumeTexture);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  for (const axis of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T, gl.TEXTURE_WRAP_R])
+    gl.texParameteri(gl.TEXTURE_3D, axis, gl.CLAMP_TO_EDGE);
+  gl.texImage3D(
+    gl.TEXTURE_3D,
+    0,
+    gl.R16F,
+    ...VOLUME_SIZE,
+    0,
+    gl.RED,
+    gl.FLOAT,
+    null,
+  );
+  let volumeTime = -1,
+    volumeCount = -1;
   const programs: WebGLProgram[] = [];
   const createProgram = (vertex: string, fragment: string) => {
     const program = gl.createProgram()!;
@@ -75,7 +99,6 @@ export function createWater(
     return program;
   };
   const particles = createProgram(particleVertex, particleFragment),
-    blur = createProgram(fullscreenVertex, blurFragment),
     surface = createProgram(fullscreenVertex, surfaceFragment);
   const particleBuffer = gl.createBuffer()!,
     quadBuffer = gl.createBuffer()!;
@@ -93,7 +116,7 @@ export function createWater(
     new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
     gl.STATIC_DRAW,
   );
-  for (const program of [blur, surface]) {
+  for (const program of [surface]) {
     const vao = gl.createVertexArray()!;
     quadVAOs.push(vao);
     gl.bindVertexArray(vao);
@@ -114,68 +137,6 @@ export function createWater(
   };
   const f = (program: WebGLProgram, name: string, value: number) =>
     gl.uniform1f(uniform(program, name), value);
-  type Target = {
-    texture: WebGLTexture;
-    framebuffer: WebGLFramebuffer;
-    depth?: WebGLRenderbuffer;
-  };
-  let targets: Target[] = [];
-  const destroyTargets = () => {
-    for (const t of targets) {
-      gl.deleteTexture(t.texture);
-      gl.deleteFramebuffer(t.framebuffer);
-      if (t.depth) gl.deleteRenderbuffer(t.depth);
-    }
-    targets = [];
-  };
-  const makeTarget = (floating: boolean, withDepth = false): Target => {
-    const texture = gl.createTexture()!,
-      framebuffer = gl.createFramebuffer()!;
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texImage2D(
-      gl.TEXTURE_2D,
-      0,
-      floating ? gl.R32F : gl.RGBA8,
-      canvas.width,
-      canvas.height,
-      0,
-      floating ? gl.RED : gl.RGBA,
-      floating ? gl.FLOAT : gl.UNSIGNED_BYTE,
-      null,
-    );
-    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-    gl.framebufferTexture2D(
-      gl.FRAMEBUFFER,
-      gl.COLOR_ATTACHMENT0,
-      gl.TEXTURE_2D,
-      texture,
-      0,
-    );
-    let depth: WebGLRenderbuffer | undefined;
-    if (withDepth) {
-      depth = gl.createRenderbuffer()!;
-      gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
-      gl.renderbufferStorage(
-        gl.RENDERBUFFER,
-        gl.DEPTH_COMPONENT24,
-        canvas.width,
-        canvas.height,
-      );
-      gl.framebufferRenderbuffer(
-        gl.FRAMEBUFFER,
-        gl.DEPTH_ATTACHMENT,
-        gl.RENDERBUFFER,
-        depth,
-      );
-    }
-    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
-      throw new Error('设备无法建立水面渲染缓冲区');
-    return { texture, framebuffer, depth };
-  };
   let yaw = 0.58,
     pitch = 0.49,
     zoom = 8,
@@ -220,17 +181,10 @@ export function createWater(
       scale = Math.min(
         window.devicePixelRatio,
         1.25,
-        1280 / Math.max(1, rect.width),
+        1100 / Math.max(1, rect.width),
       );
     canvas.width = Math.max(1, Math.round(rect.width * scale));
     canvas.height = Math.max(1, Math.round(rect.height * scale));
-    destroyTargets();
-    targets = [
-      makeTarget(true, true),
-      makeTarget(true),
-      makeTarget(true),
-      makeTarget(false),
-    ];
     gl.viewport(0, 0, canvas.width, canvas.height);
   };
   resize();
@@ -242,16 +196,6 @@ export function createWater(
     }
   });
   observer.observe(canvas);
-  const bindTexture = (
-    program: WebGLProgram,
-    name: string,
-    texture: WebGLTexture,
-    unit: number,
-  ) => {
-    gl.activeTexture(gl.TEXTURE0 + unit);
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.uniform1i(uniform(program, name), unit);
-  };
   let pointer: {
     id: number;
     x: number;
@@ -307,56 +251,42 @@ export function createWater(
         accumulator -= 1 / 120;
       }
     } else accumulator = 0;
-    gl.bindBuffer(gl.ARRAY_BUFFER, particleBuffer);
-    gl.bufferSubData(
-      gl.ARRAY_BUFFER,
-      0,
-      fluid.positions.subarray(0, fluid.count * 3),
-    );
-    gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.useProgram(particles);
-    cameraUniforms(particles);
-    gl.bindVertexArray(particleVAO);
-    f(particles, 'radius', s.particles ? 0.047 : 0.115);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, targets[0].framebuffer);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    gl.enable(gl.DEPTH_TEST);
-    gl.depthFunc(gl.LESS);
-    f(particles, 'thicknessPass', 0);
-    gl.drawArrays(gl.POINTS, 0, fluid.count);
-    gl.disable(gl.DEPTH_TEST);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, targets[3].framebuffer);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.ONE, gl.ONE);
-    f(particles, 'thicknessPass', 1);
-    gl.drawArrays(gl.POINTS, 0, fluid.count);
-    gl.disable(gl.BLEND);
-    let depthTexture = targets[0].texture;
-    if (!s.particles) {
-      gl.useProgram(blur);
-      gl.bindVertexArray(quadVAOs[0]);
-      gl.uniform2f(uniform(blur, 'resolution'), canvas.width, canvas.height);
-      for (let i = 0; i < 6; i++) {
-        const target = targets[1 + (i % 2)];
-        gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
-        bindTexture(blur, 'source', depthTexture, 0);
-        gl.uniform2f(
-          uniform(blur, 'direction'),
-          i % 2 === 0 ? 1 : 0,
-          i % 2 === 0 ? 0 : 1,
-        );
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
-        depthTexture = target.texture;
-      }
+    if (
+      !s.particles &&
+      (volumeTime !== fluid.time || volumeCount !== fluid.count)
+    ) {
+      volume.rebuild(fluid.positions, fluid.count, fluid.densities);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_3D, volumeTexture);
+      gl.texSubImage3D(
+        gl.TEXTURE_3D,
+        0,
+        0,
+        0,
+        0,
+        ...VOLUME_SIZE,
+        gl.RED,
+        gl.FLOAT,
+        volume.data,
+      );
+      volumeTime = fluid.time;
+      volumeCount = fluid.count;
     }
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    gl.disable(gl.DEPTH_TEST);
     gl.useProgram(surface);
-    gl.bindVertexArray(quadVAOs[1]);
+    gl.bindVertexArray(quadVAOs[0]);
     cameraUniforms(surface);
-    bindTexture(surface, 'depthMap', depthTexture, 0);
-    bindTexture(surface, 'thicknessMap', targets[3].texture, 1);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_3D, volumeTexture);
+    gl.uniform1i(uniform(surface, 'densityVolume'), 0);
+    gl.uniform3fv(uniform(surface, 'volumeMin'), VOLUME_MIN);
+    gl.uniform3fv(uniform(surface, 'volumeMax'), VOLUME_MAX);
+    gl.uniform3fv(uniform(surface, 'volumeSize'), VOLUME_SIZE);
+    gl.uniform3fv(uniform(surface, 'absorption'), ABSORPTION);
+    f(surface, 'volumeTop', volume.top);
+    f(surface, 'isoDensity', SURFACE_DENSITY);
     f(surface, 'time', fluid.time);
     f(surface, 'lightPower', s.light);
     f(surface, 'reflectionOn', +s.reflection);
@@ -365,6 +295,22 @@ export function createWater(
     f(surface, 'brushOn', +(!!pointer && !pointer.orbit));
     gl.uniform3fv(uniform(surface, 'brush'), pointer?.world || [0, -0.25, 0]);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
+    if (s.particles) {
+      gl.useProgram(particles);
+      cameraUniforms(particles);
+      gl.bindVertexArray(particleVAO);
+      gl.bindBuffer(gl.ARRAY_BUFFER, particleBuffer);
+      gl.bufferSubData(
+        gl.ARRAY_BUFFER,
+        0,
+        fluid.positions.subarray(0, fluid.count * 3),
+      );
+      f(particles, 'radius', 0.038);
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LESS);
+      gl.drawArrays(gl.POINTS, 0, fluid.count);
+      gl.disable(gl.DEPTH_TEST);
+    }
     frames++;
     if (now - statTime > 700) {
       onStats({
@@ -483,6 +429,7 @@ export function createWater(
     },
     reset: () => {
       fluid.reset();
+      volumeTime = -1;
       accumulator = 0;
       burst = 0;
       pointer = null;
@@ -503,7 +450,7 @@ export function createWater(
       canvas.removeEventListener('keydown', key);
       canvas.removeEventListener('contextmenu', contextMenu);
       canvas.removeEventListener('webglcontextlost', lost);
-      destroyTargets();
+      gl.deleteTexture(volumeTexture);
       gl.deleteBuffer(particleBuffer);
       gl.deleteBuffer(quadBuffer);
       gl.deleteVertexArray(particleVAO);

@@ -109,3 +109,11 @@ test('capacity fluid remains stable under strong stirring, high viscosity and ch
   assert.ok(f.positions.subarray(0, f.count * 3).every(Number.isFinite));
   assert.ok(kinetic(f) < 200);
 });
+test('under-dense particles do not attract into a jelly-like clump', () => {
+  const f = new ParticleFluid(2);
+  f.positions.set([-0.1, 1, 0, 0.1, 1, 0]);
+  f.velocities.fill(0);
+  for (let i = 0; i < 60; i++)
+    f.step(1 / 120, { gravity: 0, viscosity: 0, agitation: 0 });
+  assert.ok(Math.abs(f.positions[3] - f.positions[0] - 0.2) < 0.00001);
+});

@@ -21,6 +21,7 @@ export type FluidForces = {
 export class ParticleFluid {
   readonly positions = new Float32Array(CAPACITY * 3);
   readonly velocities = new Float32Array(CAPACITY * 3);
+  readonly densities = new Float32Array(CAPACITY);
   private previous = new Float32Array(CAPACITY * 3);
   private corrections = new Float32Array(CAPACITY * 3);
   private pressure = new Float32Array(CAPACITY);
@@ -51,19 +52,23 @@ export class ParticleFluid {
     this.seed = 71429;
     this.shakeUntil = 0;
     this.velocities.fill(0);
-    // A released water column collapses into the basin instead of an animated box.
+    // Begin with a level basin, not an elastic column or a moving solid block.
+    this.densities.fill(3.6);
     const amount = clamp(Math.round(count), 0, CAPACITY);
+    const columns = 25,
+      rows = 17;
     for (let i = 0; i < amount; i++) {
-      const x = i % 14,
-        z = Math.floor(i / 14) % 12,
-        y = Math.floor(i / 168);
+      const column = i % (columns * rows),
+        layer = Math.floor(i / (columns * rows));
+      const x = column % columns,
+        z = Math.floor(column / columns);
       this.add(
-        (x - 6.5) * 0.135 - 0.42,
-        FLOOR + 0.13 + y * 0.135,
-        (z - 5.5) * 0.135,
-        0.8,
+        (x - (columns - 1) / 2) * 0.14,
+        FLOOR + 0.08 + layer * 0.135,
+        (z - (rows - 1) / 2) * 0.15,
         0,
-        0.12,
+        0,
+        0,
       );
     }
   }
@@ -76,7 +81,9 @@ export class ParticleFluid {
     vz: number,
   ) {
     if (this.count >= CAPACITY) return;
-    const i = this.count++ * 3;
+    const particle = this.count++;
+    this.densities[particle] = 3.6;
+    const i = particle * 3;
     this.positions.set(
       [
         clamp(x, -HALF_X, HALF_X),
@@ -234,8 +241,11 @@ export class ParticleFluid {
         this.nearPressure[j] += q * q * q;
       }
       for (let i = 0; i < this.count; i++) {
-        this.pressure[i] = 520 * (this.pressure[i] - 3.6);
-        this.nearPressure[i] *= 1250;
+        this.densities[i] = this.pressure[i];
+        // Compression-only pressure avoids artificial tensile attraction (the jelly effect).
+        const compression = Math.max(0, this.pressure[i] - 3.6);
+        this.pressure[i] = 950 * compression;
+        this.nearPressure[i] *= Math.min(1, compression) * 180;
       }
       for (let a = 0; a < this.pairCount; a++) {
         const i = this.pairI[a],
@@ -276,7 +286,7 @@ export class ParticleFluid {
       v[k] = ((p[k] - prev[k]) / dt) * 0.998;
     // XSPH-style velocity averaging; equal and opposite impulses damp relative motion.
     corr.fill(0);
-    const viscosity = 0.015 + forces.viscosity * 0.16;
+    const viscosity = 0.002 + forces.viscosity * 0.065;
     for (let a = 0; a < this.pairCount; a++) {
       const k = this.pairI[a] * 3,
         b = this.pairJ[a] * 3;

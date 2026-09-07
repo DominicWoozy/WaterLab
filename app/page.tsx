@@ -68,7 +68,7 @@ function Range({
 export default function Home() {
   const [settings, setSettings] = useState<WaterSettings>(defaults),
     [stats, setStats] = useState<WaterStats>({ fps: 0, count: 1700 }),
-    [preset, setPreset] = useState('涌动'),
+    [preset, setPreset] = useState('平静'),
     [error, setError] = useState(''),
     [ready, setReady] = useState(false),
     [panelOpen, setPanelOpen] = useState(true);
@@ -112,14 +112,14 @@ export default function Home() {
     setSettings((s) => ({
       ...s,
       agitation: name === '平静' ? 0 : name === '涌动' ? 0.4 : 1.4,
-      viscosity: name === '平静' ? 0.25 : 0.12,
+      viscosity: 0.025,
       paused: false,
     }));
     if (name === '翻涌') engine.current?.shake();
   };
   const reset = () => {
     setSettings(defaults);
-    setPreset('涌动');
+    setPreset('平静');
     engine.current?.reset();
   };
   const act = (action: 'ripple' | 'shake' | 'pour' | 'drain') => {
@@ -155,7 +155,7 @@ export default function Home() {
         <div className="header-right">
           <span className="live-dot" />
           <span>粒子流体</span>
-          <span className="version">WEBGL 2 / 02</span>
+          <span className="version">WEBGL 2 / 03</span>
         </div>
       </header>
       <section className="scene-title">
@@ -176,7 +176,7 @@ export default function Home() {
         <aside className="control-panel">
           <div className="panel-heading">
             <div>
-              <span className="panel-kicker">EXPERIMENT 002</span>
+              <span className="panel-kicker">EXPERIMENT 003</span>
               <h2>自由水流</h2>
             </div>
             <Activity size={19} />
@@ -278,7 +278,7 @@ export default function Home() {
                 </div>
               </div>
               <div className="particle-toggle">
-                <label htmlFor="particles">显示计算粒子</label>
+                <label htmlFor="particles">查看物理粒子（调试）</label>
                 <Switch
                   id="particles"
                   checked={settings.particles}
@@ -291,7 +291,7 @@ export default function Home() {
               <div className="light-preview">
                 <Sun size={28} />
                 <span>
-                  柔和日光<small>连续水面 · 体积吸光</small>
+                  柔和日光<small>三维水面 · 按厚度吸光</small>
                 </span>
               </div>
               <Range
@@ -323,7 +323,7 @@ export default function Home() {
                 />
               </div>
               <p className="light-note">
-                水面由运动粒子重建。水滴可以分离，水流也能重新汇合。
+                粒子只计算运动。水面由三维密度场合成，薄水透明，深水随光程逐渐呈青蓝色。
               </p>
             </TabsContent>
           </Tabs>
