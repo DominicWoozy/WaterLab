@@ -24,7 +24,7 @@ for name,result,args in [
  ('glCreateProgram',U,[]),('glAttachShader',None,[U,U]),('glLinkProgram',None,[U]),('glGetProgramiv',None,[U,U,c.POINTER(I)]),('glGetProgramInfoLog',None,[U,I,P,P]),('glUseProgram',None,[U]),
  ('glGenTextures',None,[I,c.POINTER(U)]),('glBindTexture',None,[U,U]),('glTexImage2D',None,[U,I,I,I,I,I,U,U,P]),('glTexParameteri',None,[U,U,I]),('glTexSubImage2D',None,[U,I,I,I,I,I,U,U,P]),
  ('glGenFramebuffers',None,[I,c.POINTER(U)]),('glBindFramebuffer',None,[U,U]),('glFramebufferTexture2D',None,[U,U,U,U,I]),('glCheckFramebufferStatus',U,[U]),
- ('glViewport',None,[I,I,I,I]),('glGenVertexArrays',None,[I,c.POINTER(U)]),('glBindVertexArray',None,[U]),('glDrawArrays',None,[U,I,I]),('glDrawArraysInstanced',None,[U,I,I,I]),
+ ('glDrawBuffers',None,[I,c.POINTER(U)]),('glViewport',None,[I,I,I,I]),('glGenVertexArrays',None,[I,c.POINTER(U)]),('glBindVertexArray',None,[U]),('glDrawArrays',None,[U,I,I]),('glDrawArraysInstanced',None,[U,I,I,I]),
  ('glActiveTexture',None,[U]),('glGetUniformLocation',I,[U,S]),('glUniform1i',None,[I,I]),('glUniform1f',None,[I,F]),('glUniform2fv',None,[I,I,c.POINTER(F)]),('glUniform3fv',None,[I,I,c.POINTER(F)]),('glUniform4fv',None,[I,I,c.POINTER(F)]),
  ('glClearColor',None,[F,F,F,F]),('glClear',None,[U]),('glEnable',None,[U]),('glDisable',None,[U]),('glBlendFunc',None,[U,U]),('glReadPixels',None,[I,I,I,I,U,U,P]),('glGetError',U,[]),('glFinish',None,[])]: api(name,result,*args)
 def compile_program(v,f):
@@ -43,13 +43,13 @@ def compile_program(v,f):
         log=c.create_string_buffer(10000);G.glGetProgramInfoLog(program,10000,None,log);raise AssertionError(log.value.decode())
     return program
 programs={}
-for name in ['bounds','initialize','predict','key','sort','ranges','lambda','correct','velocity','viscosity','volume']:
+for name in ['geometry','bounds','initialize','predict','key','sort','ranges','lambda','correct','velocity','viscosity','volume']:
     programs[name]=compile_program(sources['volumeVertex' if name=='volume' else 'computeVertex'],sources[name+'Fragment'])
 compile_program(sources['fullscreenVertex'],sources['surfaceFragment'])
 compile_program(sources['particleVertex'],sources['particleFragment'])
 print('PASS: all compute, volume, surface and debug shaders compile/link',flush=True)
 vao=U();G.glGenVertexArrays(1,c.byref(vao));G.glBindVertexArray(vao)
-def target(w=128,h=128,half=False):
+def target(w=256,h=128,half=False):
     t=U();fb=U();G.glGenTextures(1,c.byref(t));G.glBindTexture(0x0DE1,t)
     G.glTexImage2D(0x0DE1,0,0x822D if half else 0x8814,w,h,0,0x1903 if half else 0x1908,0x1406,None)
     for param in [0x2801,0x2800]:G.glTexParameteri(0x0DE1,param,0x2601 if half else 0x2600)
@@ -58,12 +58,24 @@ def target(w=128,h=128,half=False):
     assert G.glCheckFramebufferStatus(0x8D40)==0x8CD5
     G.glClearColor(0,0,0,0);G.glClear(0x4000)
     return (t.value,fb.value,w,h)
-count=10000
-T={name:target() for name in ['pos','pred','corr','vel','veltmp','keys','keytmp','lambda']}
-T['ranges']=target(128,137);T['atlas']=target(1024,1920,True)
+quality=int(sys.argv[1]) if len(sys.argv)>1 else 15000
+count=quality
+scale=(10000/quality)**(1/3)
+sort_count=16384 if count<=16384 else 32768
+T={name:target() for name in ['pos','pred','corr','vel','veltmp','keys','keytmp','lambda','geometry','metric0','metric1','metric2']}
+T['ranges']=target(256,120);T['atlas']=target(1024,1920,True)
+G.glBindFramebuffer(0x8D40,T['geometry'][1])
+for attachment,name in enumerate(['metric0','metric1','metric2'],1):G.glFramebufferTexture2D(0x8D40,0x8CE0+attachment,0x0DE1,T[name][0],0)
+G.glDrawBuffers(4,(U*4)(0x8CE0,0x8CE1,0x8CE2,0x8CE3))
+volume_inputs={'positions':'geometry','metric0':'metric0','metric1':'metric1','metric2':'metric2'}
 def run(name,out,inputs={},values={}):
     t=T[out];p=programs[name];G.glBindFramebuffer(0x8D40,t[1]);G.glViewport(0,0,t[2],t[3]);G.glUseProgram(p);G.glDisable(0x0BE2)
     G.glUniform1i(G.glGetUniformLocation(p,b'count'),count)
+    G.glUniform1i(G.glGetUniformLocation(p,b'initialCount'),quality)
+    G.glUniform1i(G.glGetUniformLocation(p,b'sortCount'),sort_count)
+    G.glUniform1f(G.glGetUniformLocation(p,b'particleScale'),scale)
+    if name in ['key','sort']:G.glViewport(0,0,256,sort_count//256)
+    elif name in ['predict','lambda','correct','velocity','viscosity','geometry']:G.glViewport(0,0,256,max(1,math.ceil(count/256)))
     for unit,(uniform,tex) in enumerate(inputs.items()):
         assert T[tex]!=t
         G.glActiveTexture(0x84C0+unit);G.glBindTexture(0x0DE1,T[tex][0]);G.glUniform1i(G.glGetUniformLocation(p,uniform.encode()),unit)
@@ -73,16 +85,18 @@ def run(name,out,inputs={},values={}):
         elif name2 in ['stage','stride','previousCount']:G.glUniform1i(loc,int(value))
         else:G.glUniform1f(loc,value)
     if name=='volume':
-        G.glClearColor(0,0,0,0);G.glClear(0x4000);G.glEnable(0x0BE2);G.glBlendFunc(1,1);G.glDrawArraysInstanced(4,0,6,count*12);G.glDisable(0x0BE2)
+        G.glClearColor(0,0,0,0);G.glClear(0x4000);G.glEnable(0x0BE2);G.glBlendFunc(1,1);G.glDrawArraysInstanced(4,0,6,count*20);G.glDisable(0x0BE2)
     else:G.glDrawArrays(4,0,3)
     error=G.glGetError();assert error==0,(name,hex(error))
 def read(name):
     t=T[name];G.glBindFramebuffer(0x8D40,t[1]);a=(F*(t[2]*t[3]*4))();G.glReadPixels(0,0,t[2],t[3],0x1908,0x1406,a);assert G.glGetError()==0;return a
 
 def grid(p):
+    global sort_count
+    sort_count=16384 if count<=16384 else 32768
     run('key','keys',{'positions':p})
     stage=2
-    while stage<=16384:
+    while stage<=sort_count:
         stride=stage//2
         while stride:
             run('sort','keytmp',{'sortedKeys':'keys'},{'stage':stage,'stride':stride});T['keys'],T['keytmp']=T['keytmp'],T['keys'];stride//=2
@@ -92,17 +106,17 @@ def grid(p):
 def step(t=0,gravity=9.8,splash=(0,0,0),previous=None):
     run('predict','pred',{'positions':'pos','velocities':'vel'},{'dt':1/60,'time':t,'gravity':gravity,'agitation':0,'shake':0,'previousCount':count if previous is None else previous,'brush':[0,0,0,0],'brushVelocity':[0,0],'pourAt':[0,0],'splash':splash})
     grid('pred');ni={'sortedKeys':'keys','cellRanges':'ranges'}
-    for _ in range(2):
+    for _ in range(3 if quality==30000 else 2):
         run('lambda','lambda',{'positions':'pred',**ni});run('correct','corr',{'positions':'pred','lambdas':'lambda',**ni});T['pred'],T['corr']=T['corr'],T['pred']
     run('velocity','veltmp',{'positions':'pred','oldPositions':'pos'},{'dt':1/60,'previousCount':count if previous is None else previous})
     run('viscosity','vel',{'positions':'pred','velocities':'veltmp',**ni},{'viscosity':.025});T['pos'],T['pred']=T['pred'],T['pos']
-run('initialize','pos');initial=read('pos');assert sum(initial[4*i+3]>.5 for i in range(16384))==10000
-assert len({tuple(initial[4*i:4*i+3]) for i in range(count)})==10000
-print('PASS: 10,000 unique initialized GPU particles',flush=True)
-grid('pos');keys=read('keys');pairs=[tuple(keys[4*i:4*i+2]) for i in range(16384)];assert pairs==sorted(pairs)
+run('initialize','pos');initial=read('pos');assert sum(initial[4*i+3]>.5 for i in range(32768))==quality
+assert len({tuple(initial[4*i:4*i+3]) for i in range(count)})==quality
+print('PASS:',quality,'unique initialized GPU particles',flush=True)
+grid('pos');keys=read('keys');pairs=[tuple(keys[4*i:4*i+2]) for i in range(sort_count)];assert pairs==sorted(pairs)
 assert set(int(x[1]) for x in pairs[:count])==set(range(count))
 ranges=read('ranges')
-for k in range(26*32*21):
+for k in range(32*40*24):
     lo,hi=map(int,ranges[4*k:4*k+2]);assert 0<=lo<=hi<=count
     if lo<hi:assert all(pairs[j][0]==k for j in range(lo,hi))
     if lo>0:assert pairs[lo-1][0]<k
@@ -119,25 +133,28 @@ print('PASS: 120 steps, calm mean squared speed %.4f; elapsed %.2fs'%(energy,tim
 step(2,splash=(0,0,3));v=read('vel');assert max(v[4*i+1] for i in range(count))>1
 for i in range(30):step(2+i/60)
 for i in range(112):
-    previous=count;count=min(12000,count+18);step(3+i/60,previous=previous)
-p=read('pos');assert all(p[4*i+1]>1.7 for i in range(11998,12000))
+    previous=count;count=min(30000,quality+2000,count+18);step(3+i/60,previous=previous)
+p=read('pos');
+if quality<30000:assert all(p[4*i+1]>1.7 for i in range(count-2,count))
 assert all(math.isfinite(x) for x in p)
-print('PASS: splash response and GPU particle injection to 12,000',flush=True)
+print('PASS: splash response and capacity/injection', count,flush=True)
 # Compare actual half-float additive volume against the CPU kernel at grid nodes.
-run('volume','atlas',{'positions':'pos','lambdas':'lambda'});atlas=read('atlas');lam=read('lambda')
+grid('pos');run('geometry','geometry',{'positions':'pos','sortedKeys':'keys','cellRanges':'ranges'})
+run('volume','atlas',volume_inputs);atlas=read('atlas');geo=read('geometry');metrics=[read('metric'+str(i)) for i in range(3)]
 def density_node(x,y,z):return atlas[4*((z//8*160+y)*1024+z%8*128+x)]
 for x,y,z in [(64,11,48),(64,92,48),(33,11,40)]:
     world=[-2.08+x/127*4.16,-1.12+y/159*5.2,-1.56+z/95*3.12];expected=0
     for i in range(count):
-        blend=max(0,min(1,(lam[4*i+1]-.15)/1.05));blend=blend*blend*(3-2*blend)
-        radius=.1+(.19-.1)*blend
-        r2=sum(((world[j]-p[4*i+j])/radius)**2 for j in range(3))
-        if r2<1:expected+=(1-r2)**3*(1+max(0,1-lam[4*i+1])*.8)
+        blend=max(0,min(1,(geo[4*i+3]-.15)/1.05));blend=blend*blend*(3-2*blend)
+        radius=max(.095,(.1+(.19-.1)*blend)*scale)
+        d=[(world[j]-geo[4*i+j])/radius for j in range(3)]
+        r2=sum(d[row]*metrics[col][4*i+row]*d[col] for row in range(3) for col in range(3))
+        if r2<1:expected+=(1-r2)**3*(1+max(0,1-geo[4*i+3])*.8)
     actual=density_node(x,y,z);assert abs(actual-expected)<max(.02,expected*.025),(actual,expected)
 assert max(atlas[::4])>1.15
 source='pos'
-for size in [64,32,16,8,4,2,1]:
-    name='bounds'+str(size);T[name]=target(size,size)
+for size in [128,64,32,16,8,4,2,1]:
+    name='bounds'+str(size);T[name]=target(size,max(1,size//2))
     run('bounds',name,{'source':source},{'firstLevel':int(source=='pos')});source=name
 assert abs(read('bounds1')[1]-max(p[4*i+1] for i in range(count)))<.00001
 print('PASS: GPU maximum-height reduction matches particle state',flush=True)
@@ -145,14 +162,15 @@ print('PASS: GPU density atlas agrees with CPU kernel (half-float tolerance)',fl
 # Isolated drops must shrink in world space and remain visible at off-grid positions.
 count=1
 for offset in [0., .25, .5, .75]:
-    pos=(F*(128*128*4))(); pressure=(F*(128*128*4))()
+    pos=(F*(256*128*4))(); pressure=(F*(256*128*4))()
     px=-2.08+(64+offset)/127*4.16
     py=-1.12+(50+offset)/159*5.2
     pz=-1.56+(48+offset)/95*3.12
     pos[0:4]=[px,py,pz,1.]
     for name,data in [('pos',pos),('lambda',pressure)]:
-        G.glBindTexture(0x0DE1,T[name][0]);G.glTexSubImage2D(0x0DE1,0,0,0,128,128,0x1908,0x1406,data)
-    run('volume','atlas',{'positions':'pos','lambdas':'lambda'});atlas=read('atlas')
+        G.glBindTexture(0x0DE1,T[name][0]);G.glTexSubImage2D(0x0DE1,0,0,0,256,128,0x1908,0x1406,data)
+    grid('pos');run('geometry','geometry',{'positions':'pos','sortedKeys':'keys','cellRanges':'ranges'})
+    run('volume','atlas',volume_inputs);atlas=read('atlas')
     wet=[]
     for z in range(43,54):
         for y in range(45,56):
@@ -162,6 +180,52 @@ for offset in [0., .25, .5, .75]:
     assert wet, ('off-grid droplet disappeared',offset)
     assert max(math.dist((px,py,pz),point) for point in wet)<.04
 print('PASS: small isolated spray remains visible at four sub-voxel offsets, radius < 0.04',flush=True)
-count=0;run('volume','atlas',{'positions':'pos','lambdas':'lambda'});assert max(read('atlas')[::4])==0
+# Surface regression: identical jittered slab, isotropic vs covariance reconstruction.
+count=quality
+jitter=(F*(256*128*4))(*initial)
+for i in range(count):jitter[4*i+1]+=.012*math.sin(i*17.3)
+def upload(name,data):
+    G.glBindTexture(0x0DE1,T[name][0]);G.glTexSubImage2D(0x0DE1,0,0,0,256,128,0x1908,0x1406,data)
+upload('pos',jitter);grid('pos');run('geometry','geometry',{'positions':'pos','sortedKeys':'keys','cellRanges':'ranges'})
+shape=read('geometry');tensor=[read('metric'+str(i)) for i in range(3)]
+for i in range(count):
+    m=[[tensor[col][4*i+row] for col in range(3)] for row in range(3)]
+    det=m[0][0]*(m[1][1]*m[2][2]-m[1][2]*m[2][1])-m[0][1]*(m[1][0]*m[2][2]-m[1][2]*m[2][0])+m[0][2]*(m[1][0]*m[2][1]-m[1][1]*m[2][0])
+    assert abs(det-1)<.002 and m[0][0]>0 and m[0][0]*m[1][1]-m[0][1]*m[1][0]>0
+run('volume','atlas',volume_inputs);atlas=read('atlas')
+def field(x,y,z):
+    u=(x+2.08)/4.16*127;v=(y+1.12)/5.2*159;w=(z+1.56)/3.12*95
+    ix,iy,iz=math.floor(u),math.floor(v),math.floor(w);fx,fy,fz=u-ix,v-iy,w-iz
+    return sum(density_node(ix+dx,iy+dy,iz+dz)*(fx if dx else 1-fx)*(fy if dy else 1-fy)*(fz if dz else 1-fz) for dx in range(2) for dy in range(2) for dz in range(2))
+def surface_rms():
+    heights=[]
+    for ix in range(11):
+        for iz in range(9):
+            x=-.9+ix*.18;z=-.6+iz*.15;hi=-.2;lo=hi
+            for _ in range(100):
+                lo-=.008
+                if field(x,lo,z)>1.15:break
+                hi=lo
+            assert hi>-.9
+            for _ in range(8):
+                mid=(lo+hi)/2
+                if field(x,mid,z)>1.15:lo=mid
+                else:hi=mid
+            heights.append((lo+hi)/2)
+    mean=sum(heights)/len(heights)
+    return math.sqrt(sum((h-mean)**2 for h in heights)/len(heights))
+anisotropic=surface_rms()
+for i in range(count):jitter[4*i+3]=shape[4*i+3]
+upload('geometry',jitter)
+for col in range(3):
+    identity=(F*(256*128*4))()
+    for i in range(count):identity[4*i+col]=1
+    upload('metric'+str(col),identity)
+run('volume','atlas',volume_inputs);atlas=read('atlas');isotropic=surface_rms()
+print('Surface RMS: isotropic %.3f mm, covariance %.3f mm'%(isotropic*1000,anisotropic*1000),flush=True)
+# Require improvement when noise is measurable; allow a 0.2 mm floor for already-flat surfaces.
+assert anisotropic<max(.0002,isotropic*.9),(anisotropic,isotropic)
+print('PASS: positive definite volume-preserving tensors and bounded surface noise',flush=True)
+count=0;run('volume','atlas',volume_inputs);assert max(read('atlas')[::4])==0
 print('PASS: empty volume clears without stale water',flush=True)
 print('All native GPU checks passed.',flush=True)

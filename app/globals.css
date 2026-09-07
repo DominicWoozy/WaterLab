@@ -1003,5 +1003,22 @@ button:hover {
   scrollbar-color: #52766e #172629;
 }
 @media (max-width: 760px) {
-  .particle-app .control-panel { max-height: none; overflow-y: visible; }
+  .particle-app .control-panel {
+    max-height: none;
+    overflow-y: visible;
+  }
+}
+
+.quality-control {
+  margin: 16px 0;
+}
+.quality-control [data-slot='tabs-list'] {
+  width: 100%;
+  margin-top: 9px;
+}
+.quality-control p {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #8b9eaa;
+  margin: 8px 0 0;
 }

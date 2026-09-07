@@ -1,3 +1,4 @@
+import { PARTICLE_WIDTH } from './gpu-particle-config.ts';
 import { GPU_ATLAS_SIZE } from './gpu-volume-config.ts';
 export const fullscreenVertex = `#version 300 es
 in vec2 position;
@@ -11,7 +12,7 @@ uniform vec3 eye, cameraRight, cameraUp, cameraForward;
 uniform float offsetX, radius;
 out float eyeDepth;
 void main(){
- vec3 position=texelFetch(positions,ivec2(gl_VertexID%128,gl_VertexID/128),0).xyz;
+ vec3 position=texelFetch(positions,ivec2(gl_VertexID%${PARTICLE_WIDTH},gl_VertexID/${PARTICLE_WIDTH}),0).xyz;
  vec3 p=position-eye;
  float z=dot(p,cameraForward);eyeDepth=z;
  vec2 xy=vec2(dot(p,cameraRight),dot(p,cameraUp));
@@ -126,7 +127,7 @@ vec3 scene(vec3 ro,vec3 rd){
  return c;
 }
 void main(){
- volumeTop=texelFetch(waterBounds,ivec2(0),0).y+.19;
+ volumeTop=texelFetch(waterBounds,ivec2(0),0).y+.36;
  vec3 rd=ray(texcoord);vec3 color=scene(eye,rd);
  vec2 interval=boxHit(eye,rd);
  float at=max(0.,interval.x),last=at;bool found=false;

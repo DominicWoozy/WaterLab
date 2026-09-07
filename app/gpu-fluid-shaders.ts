@@ -1,3 +1,4 @@
+import { PARTICLE_WIDTH } from './gpu-particle-config.ts';
 import {
   GPU_VOLUME_SIZE,
   GPU_ATLAS_SIZE,
@@ -15,12 +16,14 @@ precision highp int;
 precision highp sampler2D;
 uniform sampler2D positions, velocities, sortedKeys, cellRanges, lambdas, oldPositions;
 uniform int count;
-const float H=.17, REST=3.6;
-ivec2 uv(int i){return ivec2(i%128,i/128);}
-int id(){return int(gl_FragCoord.x)+int(gl_FragCoord.y)*128;}
+uniform float particleScale;
+const float REST=3.6;
+#define H (.17*particleScale)
+ivec2 uv(int i){return ivec2(i%${PARTICLE_WIDTH},i/${PARTICLE_WIDTH});}
+int id(){return int(gl_FragCoord.x)+int(gl_FragCoord.y)*${PARTICLE_WIDTH};}
 vec4 readAt(sampler2D t,int i){return texelFetch(t,uv(i),0);}
-ivec3 cell(vec3 p){return clamp(ivec3(floor((p-vec3(-2.04,-1.19,-1.53))/.21)),ivec3(0),ivec3(25,31,20));}
-int key(ivec3 c){return c.x+26*(c.y+32*c.z);}
+ivec3 cell(vec3 p){return clamp(ivec3(floor((p-vec3(-2.04,-1.19,-1.53))/(.225*particleScale))),ivec3(0),ivec3(31,39,23));}
+int key(ivec3 c){return c.x+32*(c.y+40*c.z);}
 vec3 bound(vec3 p){return clamp(p,vec3(-1.78,-.917,-1.28),vec3(1.78,3.8,1.28));}
 vec3 limited(vec3 v,float m){return v*min(1.,m/max(length(v),.000001));}
 `;
@@ -28,7 +31,9 @@ export const initializeFragment =
   common +
   `
 out vec4 result;
-void main(){int i=id();result=i<count?vec4(-1.7+float(i%50)*(3.4/49.),-.917+float(i/2000)*.09,-1.2+float((i/50)%40)*(2.4/39.),1.):vec4(0.);}`;
+uniform int initialCount;
+void main(){int i=id();int nx=initialCount>15000?75:60,nz=50,ny=initialCount>15000?8:5;
+ result=i<count?vec4(-1.7+float(i%nx)*3.4/float(nx-1),-.917+float(i/(nx*nz))*.36/float(ny-1),-1.2+float((i/nx)%nz)*2.4/float(nz-1),1.):vec4(0.); }`;
 export const predictFragment =
   common +
   `
@@ -69,14 +74,15 @@ void main(){int i=id(),j=i^stride;vec4 a=readAt(sortedKeys,i),b=readAt(sortedKey
 export const rangesFragment =
   common +
   `
+uniform int sortCount;
 out vec4 result;
-int lowerBound(float k){int lo=0,hi=16384;for(int n=0;n<15;n++){if(lo>=hi)break;int m=(lo+hi)/2;if(readAt(sortedKeys,m).x<k)lo=m+1;else hi=m;}return lo;}
+int lowerBound(float k){int lo=0,hi=sortCount;for(int n=0;n<16;n++){if(lo>=hi)break;int m=(lo+hi)/2;if(readAt(sortedKeys,m).x<k)lo=m+1;else hi=m;}return lo;}
 void main(){int k=id();result=vec4(float(lowerBound(float(k))),float(lowerBound(float(k+1))),0.,0.);}`;
 // Ranges contain every particle in a cell: no fixed neighbour bucket or overflow truncation.
 const neighbors = (body: string) => `
  ivec3 base=cell(p);
  for(int z=-1;z<=1;z++)for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++){
-  ivec3 c=base+ivec3(x,y,z);if(any(lessThan(c,ivec3(0)))||any(greaterThan(c,ivec3(25,31,20))))continue;
+  ivec3 c=base+ivec3(x,y,z);if(any(lessThan(c,ivec3(0)))||any(greaterThan(c,ivec3(31,39,23))))continue;
   vec2 range=readAt(cellRanges,key(c)).xy;
   for(int at=int(range.x);at<int(range.y);at++){
    int j=int(readAt(sortedKeys,at).y);if(j==i)continue;
@@ -102,7 +108,7 @@ out vec4 result;
 void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positions,i).xyz;
  float lambda=readAt(lambdas,i).x;vec3 delta=vec3(0.);
  ${neighbors('delta-=(lambda+readAt(lambdas,j).x)*gradient;')}
- result=vec4(bound(p+limited(delta,.017)),1.);
+ result=vec4(bound(p+limited(delta,.017*particleScale)),1.);
 }`;
 export const velocityFragment =
   common +
@@ -123,24 +129,56 @@ void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positi
  ${neighbors('delta+=(readAt(velocities,j).xyz-v)*q*q;')}
  result=vec4(limited(v+delta*(.002+viscosity*.065),12.),0.);
 }`;
+/** Yu & Turk inspired covariance kernels and render-only centre smoothing.
+ * Regularization replaces their explicit eigenvalue clamp; not a verbatim paper implementation. */
+export const geometryFragment =
+  common +
+  `
+layout(location=0) out vec4 center;
+layout(location=1) out vec4 metric0;
+layout(location=2) out vec4 metric1;
+layout(location=3) out vec4 metric2;
+void main(){
+ int i=id();vec3 p=readAt(positions,i).xyz;
+ float total=1.,rho=0.,nearby=0.;vec3 mean=vec3(0.);mat3 cov=mat3(0.);
+ if(i<count){
+ ${neighbors('float w=q*q*q;total+=w;mean-=d*w;cov+=outerProduct(d,d)*w;rho+=q*q;nearby+=1.;')}
+ }
+ mean/=total;cov=cov/total-outerProduct(mean,mean);
+ float trace=max(cov[0][0]+cov[1][1]+cov[2][2],1e-8);
+ // Positive definite regularization bounds the axis ratio, including sheets and streams.
+ cov+=mat3(trace*.18+1e-7);
+ cov/=pow(max(determinant(cov),1e-24),1./3.);
+ float confidence=smoothstep(5.,14.,nearby)*smoothstep(.35,1.5,rho);
+ cov=mat3(1.)*(1.-confidence)+cov*confidence;
+ cov/=pow(max(determinant(cov),1e-8),1./3.);
+ mat3 metric=inverse(cov);
+ center=vec4(p+limited(mean*.55*confidence,.025*particleScale),rho);
+ metric0=vec4(metric[0],0.);metric1=vec4(metric[1],0.);metric2=vec4(metric[2],0.);
+}
+`;
 // 96 Z slices in an 8x12 atlas. Each particle emits only the slices its kernel intersects.
 export const volumeVertex = `#version 300 es
 precision highp float;
 precision highp int;
-uniform highp sampler2D positions, lambdas;
+uniform highp sampler2D positions, lambdas, metric0, metric1, metric2;
+uniform float particleScale;
 out vec3 local;
+flat out mat3 metric;
 out float weight;
 const vec3 lo=vec3(-2.08,-1.12,-1.56),hi=vec3(2.08,4.08,1.56),size=vec3(${GPU_VOLUME_SIZE.map((n) => n.toFixed(1)).join(',')});
 void main(){
- int i=gl_InstanceID/${GPU_SLICES_PER_PARTICLE},k=gl_InstanceID%${GPU_SLICES_PER_PARTICLE};ivec2 uv=ivec2(i%128,i/128);
- vec3 p=texelFetch(positions,uv,0).xyz;
- float rho=texelFetch(lambdas,uv,0).y;
+ int i=gl_InstanceID/${GPU_SLICES_PER_PARTICLE},k=gl_InstanceID%${GPU_SLICES_PER_PARTICLE};ivec2 uv=ivec2(i%${PARTICLE_WIDTH},i/${PARTICLE_WIDTH});
+ vec4 center=texelFetch(positions,uv,0);vec3 p=center.xyz;float rho=center.w;
+ metric=mat3(texelFetch(metric0,uv,0).xyz,texelFetch(metric1,uv,0).xyz,texelFetch(metric2,uv,0).xyz);
  float bulk=smoothstep(.15,1.2,rho);
  // Detached spray gets a smaller support; connected water keeps its broad smooth surface.
- float radius=mix(${SPRAY_KERNEL_RADIUS.toFixed(3)},${BULK_KERNEL_RADIUS.toFixed(3)},bulk);
- int slice=int(ceil((p.z-radius-lo.z)/(hi.z-lo.z)*(size.z-1.)))+k;
+ float radius=max(.095,mix(${SPRAY_KERNEL_RADIUS.toFixed(3)},${BULK_KERNEL_RADIUS.toFixed(3)},bulk)*particleScale);
+ mat3 shape=inverse(metric);
+ vec3 extent=radius*sqrt(vec3(shape[0][0],shape[1][1],shape[2][2]));
+ int slice=int(ceil((p.z-extent.z-lo.z)/(hi.z-lo.z)*(size.z-1.)))+k;
  vec2 corners[6]=vec2[6](vec2(-1.,-1.),vec2(1.,-1.),vec2(-1.,1.),vec2(-1.,1.),vec2(1.,-1.),vec2(1.,1.));
- vec2 xy=p.xy+corners[gl_VertexID]*radius;
+ vec2 xy=p.xy+corners[gl_VertexID]*extent.xy;
  vec2 node=(xy-lo.xy)/(hi.xy-lo.xy)*(size.xy-1.);
  vec2 tile=vec2(slice%8,slice/8);
  vec2 pixel=tile*size.xy+node+.5;
@@ -148,27 +186,29 @@ void main(){
  float z=lo.z+float(slice)/(size.z-1.)*(hi.z-lo.z);
  local=vec3(xy-p.xy,z-p.z)/radius;
  weight=1.+max(0.,1.-rho)*.8;
- if(slice<0||slice>=int(size.z)||abs(z-p.z)>radius)gl_Position=vec4(2.,2.,2.,1.);
+ if(slice<0||slice>=int(size.z)||abs(z-p.z)>extent.z)gl_Position=vec4(2.,2.,2.,1.);
 }`;
 export const volumeFragment = `#version 300 es
 precision highp float;
 in vec3 local;
 in float weight;
+flat in mat3 metric;
 out vec4 result;
-void main(){float r2=dot(local,local);if(r2>=1.)discard;float q=1.-r2;result=vec4(q*q*q*weight,0.,0.,1.);}`;
+void main(){float r2=dot(local,metric*local);if(r2>=1.)discard;float q=1.-r2;result=vec4(q*q*q*weight,0.,0.,1.);}`;
 /** Parallel max reduction provides tight ray bounds without a CPU readback. */
 export const boundsFragment = `#version 300 es
 precision highp float;
 uniform highp sampler2D source;
 uniform int count;
+uniform float particleScale;
 uniform float firstLevel;
 out vec4 result;
 void main(){
  ivec2 p=ivec2(gl_FragCoord.xy)*2;float top=-1.2;
  for(int y=0;y<2;y++)for(int x=0;x<2;x++){
-  ivec2 at=p+ivec2(x,y);
+  ivec2 at=min(p+ivec2(x,y),textureSize(source,0)-1);
   vec4 a=texelFetch(source,at,0);
-  if(a.w>.5&&(firstLevel<.5||at.x+at.y*128<count))top=max(top,a.y);
+  if(a.w>.5&&(firstLevel<.5||at.x+at.y*${PARTICLE_WIDTH}<count))top=max(top,a.y);
  }
  result=vec4(0.,top,0.,1.);
 }`;

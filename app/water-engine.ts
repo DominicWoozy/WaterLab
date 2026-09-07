@@ -5,8 +5,8 @@ import {
   SURFACE_DENSITY,
   ABSORPTION,
 } from './fluid-volume';
-import { GpuFluid } from './gpu-fluid';
-import type { FluidAction } from './fluid-runtime';
+import { GpuFluid, type GpuFluidAction } from './gpu-fluid';
+import type { ParticleQuality } from './gpu-particle-config';
 import {
   fullscreenVertex,
   particleVertex,
@@ -55,7 +55,7 @@ export function createWater(
     throw new Error('水体合成需要 WebGL 2 支持，请启用浏览器硬件加速后重试。');
 
   const fluid = new GpuFluid(gl);
-  const actions: FluidAction[] = [];
+  const actions: GpuFluidAction[] = [];
   let lastUpdate = 0;
   const programs: WebGLProgram[] = [];
   const createProgram = (vertex: string, fragment: string) => {
@@ -400,6 +400,11 @@ export function createWater(
   canvas.addEventListener('webglcontextlost', lost);
   raf = requestAnimationFrame(render);
   return {
+    setQuality: (count: ParticleQuality) => {
+      actions.length = 0;
+      actions.push({ type: 'quality', count });
+      pointer = null;
+    },
     ripple: () => {
       actions.push({ type: 'splash', strength: getSettings().strength });
     },

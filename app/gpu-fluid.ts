@@ -4,7 +4,16 @@ import {
 } from './gpu-volume-config.ts';
 import * as shaders from './gpu-fluid-shaders.ts';
 import type { FluidAction, FluidJob } from './fluid-runtime.ts';
-import { CAPACITY, DEFAULT_COUNT } from './fluid-simulation.ts';
+import {
+  GPU_CAPACITY as CAPACITY,
+  GPU_DEFAULT_COUNT as DEFAULT_COUNT,
+  PARTICLE_WIDTH,
+  PARTICLE_HEIGHT,
+  type ParticleQuality,
+} from './gpu-particle-config.ts';
+export type GpuFluidAction =
+  | FluidAction
+  | { type: 'quality'; count: ParticleQuality };
 type Target = {
   texture: WebGLTexture;
   framebuffer: WebGLFramebuffer;
@@ -15,6 +24,8 @@ type Target = {
 export class GpuFluid {
   count = DEFAULT_COUNT;
   time = 0;
+  quality: ParticleQuality = DEFAULT_COUNT;
+  private sortCount = 16384;
   private gl: WebGL2RenderingContext;
   private targets: Target[] = [];
   private programs = new Map<string, WebGLProgram>();
@@ -34,6 +45,7 @@ export class GpuFluid {
   private lambda: Target;
   private atlas: Target;
   private bounds: Target[] = [];
+  private geometry: Target[] = [];
   private accumulator = 0;
   private pendingPour = 0;
   private pourAt = [-0.7, 0];
@@ -56,12 +68,30 @@ export class GpuFluid {
       this.velocityTemp = this.target();
       this.keys = this.target();
       this.keysTemp = this.target();
-      this.ranges = this.target(128, 137);
+      this.ranges = this.target(PARTICLE_WIDTH, 120);
       this.lambda = this.target();
       this.atlas = this.target(...GPU_ATLAS_SIZE, true);
-      for (let size = 64; size >= 1; size /= 2)
-        this.bounds.push(this.target(size, size));
+      for (
+        let width = 128, height = 64;
+        width >= 1;
+        width /= 2, height = Math.max(1, height / 2)
+      )
+        this.bounds.push(this.target(width, height));
+      for (let i = 0; i < 4; i++) this.geometry.push(this.target());
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.geometry[0].framebuffer);
+      for (let i = 1; i < 4; i++)
+        gl.framebufferTexture2D(
+          gl.FRAMEBUFFER,
+          gl.COLOR_ATTACHMENT0 + i,
+          gl.TEXTURE_2D,
+          this.geometry[i].texture,
+          0,
+        );
+      gl.drawBuffers([0, 1, 2, 3].map((i) => gl.COLOR_ATTACHMENT0 + i));
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+        throw new Error('当前设备无法创建水面重建缓冲。');
       for (const name of [
+        'geometry',
         'bounds',
         'initialize',
         'predict',
@@ -98,7 +128,11 @@ export class GpuFluid {
   get volumeBounds() {
     return this.bounds[this.bounds.length - 1].texture;
   }
-  private target(width = 128, height = 128, half = false): Target {
+  private target(
+    width = PARTICLE_WIDTH,
+    height = PARTICLE_HEIGHT,
+    half = false,
+  ): Target {
     const gl = this.gl,
       texture = gl.createTexture()!,
       framebuffer = gl.createFramebuffer()!;
@@ -183,7 +217,25 @@ export class GpuFluid {
     const gl = this.gl,
       program = this.programs.get(name)!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
-    gl.viewport(0, 0, target.width, target.height);
+    const particlePass = [
+      'predict',
+      'lambda',
+      'correct',
+      'velocity',
+      'viscosity',
+      'geometry',
+    ].includes(name);
+    const sortPass = name === 'key' || name === 'sort';
+    gl.viewport(
+      0,
+      0,
+      target.width,
+      particlePass
+        ? Math.max(1, Math.ceil(this.count / PARTICLE_WIDTH))
+        : sortPass
+          ? this.sortCount / PARTICLE_WIDTH
+          : target.height,
+    );
     gl.bindVertexArray(this.vao);
     gl.useProgram(program);
     gl.disable(gl.DEPTH_TEST);
@@ -196,6 +248,12 @@ export class GpuFluid {
       gl.uniform1i(this.location(program, key), unit++);
     }
     gl.uniform1i(this.location(program, 'count'), this.count);
+    gl.uniform1f(
+      this.location(program, 'particleScale'),
+      Math.cbrt(10000 / this.quality),
+    );
+    gl.uniform1i(this.location(program, 'sortCount'), this.sortCount);
+    gl.uniform1i(this.location(program, 'initialCount'), this.quality);
     for (const [key, value] of Object.entries(values)) {
       const location = this.location(program, key);
       if (Array.isArray(value)) {
@@ -222,7 +280,7 @@ export class GpuFluid {
     } else gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
   private reset() {
-    this.count = DEFAULT_COUNT;
+    this.count = this.quality;
     this.time = 0;
     this.accumulator = 0;
     this.pendingPour = 0;
@@ -239,9 +297,10 @@ export class GpuFluid {
     this.densityDirty = true;
   }
   private buildGrid(p: Target) {
+    this.sortCount = this.count > 16384 ? 32768 : 16384;
     this.run('key', this.keys, { positions: p });
     // Bitonic sorting is bounded by texture capacity, independent of occupied-cell density.
-    for (let stage = 2; stage <= 16384; stage *= 2)
+    for (let stage = 2; stage <= this.sortCount; stage *= 2)
       for (let stride = stage / 2; stride >= 1; stride /= 2) {
         this.run(
           'sort',
@@ -256,14 +315,8 @@ export class GpuFluid {
   update(
     job: Pick<
       FluidJob,
-      | 'elapsed'
-      | 'speed'
-      | 'paused'
-      | 'forces'
-      | 'brush'
-      | 'actions'
-      | 'particles'
-    >,
+      'elapsed' | 'speed' | 'paused' | 'forces' | 'brush' | 'particles'
+    > & { actions: GpuFluidAction[] },
   ) {
     for (const action of job.actions) this.action(action);
     if (job.paused) this.accumulator = 0;
@@ -306,7 +359,11 @@ export class GpuFluid {
       this.splash = [0, 0, 0];
       this.buildGrid(this.predicted);
       const neighborInputs = { sortedKeys: this.keys, cellRanges: this.ranges };
-      for (let iteration = 0; iteration < 2; iteration++) {
+      for (
+        let iteration = 0;
+        iteration < (this.quality === 30000 ? 3 : 2);
+        iteration++
+      ) {
         this.run('lambda', this.lambda, {
           positions: this.predicted,
           ...neighborInputs,
@@ -343,13 +400,13 @@ export class GpuFluid {
     if (this.dirty && !job.particles) {
       if (this.densityDirty) {
         this.buildGrid(this.position);
-        this.run('lambda', this.lambda, {
-          positions: this.position,
-          sortedKeys: this.keys,
-          cellRanges: this.ranges,
-        });
         this.densityDirty = false;
       }
+      this.run('geometry', this.geometry[0], {
+        positions: this.position,
+        sortedKeys: this.keys,
+        cellRanges: this.ranges,
+      });
       let source = this.position;
       for (const target of this.bounds) {
         this.run(
@@ -361,14 +418,22 @@ export class GpuFluid {
         source = target;
       }
       this.run('volume', this.atlas, {
-        positions: this.position,
-        lambdas: this.lambda,
+        positions: this.geometry[0],
+        metric0: this.geometry[1],
+        metric1: this.geometry[2],
+        metric2: this.geometry[3],
       });
       this.dirty = false;
     }
     this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
   }
-  private action(action: FluidAction) {
+  private action(action: GpuFluidAction) {
+    if (action.type === 'quality') {
+      if (action.count !== 15000 && action.count !== 30000)
+        throw new Error('粒子精度须为 15000 或 30000');
+      this.quality = action.count;
+      this.reset();
+    }
     if (action.type === 'reset') this.reset();
     if (action.type === 'drain') {
       this.count = Math.max(0, this.count - (action.amount ?? 500));

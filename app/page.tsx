@@ -27,7 +27,11 @@ import {
   type WaterSettings,
   type WaterStats,
 } from './water-engine';
-import { CAPACITY, DEFAULT_COUNT } from './fluid-simulation';
+import {
+  GPU_CAPACITY as CAPACITY,
+  GPU_DEFAULT_COUNT as DEFAULT_COUNT,
+  type ParticleQuality,
+} from './gpu-particle-config';
 function Range({
   label,
   value,
@@ -68,6 +72,7 @@ function Range({
 export default function Home() {
   const [settings, setSettings] = useState<WaterSettings>(defaults),
     [stats, setStats] = useState<WaterStats>({ fps: 0, count: DEFAULT_COUNT }),
+    [quality, setQuality] = useState<ParticleQuality>(DEFAULT_COUNT),
     [preset, setPreset] = useState('平静'),
     [error, setError] = useState(''),
     [ready, setReady] = useState(false),
@@ -176,7 +181,7 @@ export default function Home() {
         <aside className="control-panel">
           <div className="panel-heading">
             <div>
-              <span className="panel-kicker">EXPERIMENT 006</span>
+              <span className="panel-kicker">EXPERIMENT 007</span>
               <h2>自由水流</h2>
             </div>
             <Activity size={19} />
@@ -252,6 +257,28 @@ export default function Home() {
                 suffix="×"
                 onChange={(v) => update('speed', v)}
               />
+              <div className="quality-control">
+                <span className="section-label">模拟精度</span>
+                <Tabs
+                  value={String(quality)}
+                  onValueChange={(v) => {
+                    const next = Number(v) as ParticleQuality;
+                    setQuality(next);
+                    engine.current?.setQuality(next);
+                    setStats((s) => ({ ...s, count: next }));
+                  }}
+                >
+                  <TabsList aria-label="粒子精度">
+                    <TabsTrigger value="15000" disabled={!ready || !!error}>
+                      15,000 · 均衡
+                    </TabsTrigger>
+                    <TabsTrigger value="30000" disabled={!ready || !!error}>
+                      30,000 · 精细
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+                <p>切换会重置水体，水量近似相同；精细模式更耗性能。</p>
+              </div>
               <div className="particle-count">
                 <div>
                   <span>水量</span>

@@ -45,6 +45,7 @@ function recordingGL(floatSupport = true) {
     checkFramebufferStatus() {
       return gl.FRAMEBUFFER_COMPLETE;
     },
+    drawBuffers() {},
     bindTexture() {},
     texStorage2D() {},
     texParameteri() {},
@@ -126,13 +127,13 @@ test('GPU update dispatches full physics, volume and bounds without state readba
     fluid = new GpuFluid(gl);
   gl.draws.length = 0;
   fluid.update(job());
-  assert.equal(fluid.count, 10000);
+  assert.equal(fluid.count, 15000);
   assert.equal(gl.draws.filter((d) => d.name === 'sortFragment').length, 105);
   assert.equal(gl.draws.filter((d) => d.name === 'correctFragment').length, 2);
-  assert.equal(gl.draws.filter((d) => d.name === 'boundsFragment').length, 7);
+  assert.equal(gl.draws.filter((d) => d.name === 'boundsFragment').length, 8);
   assert.equal(
     gl.draws.find((d) => d.name === 'volumeFragment').instances,
-    120000,
+    300000,
   );
   assert.equal(
     gl.draws.find((d) => d.name === 'predictFragment').values.dt,
@@ -162,23 +163,23 @@ test('GPU actions retain count limits, staged injection, reset, and fixed timest
   const gl = recordingGL(),
     fluid = new GpuFluid(gl);
   fluid.update(job({ actions: [{ type: 'pour', amount: 2000 }] }));
-  assert.equal(fluid.count, 10018);
+  assert.equal(fluid.count, 15018);
   assert.equal(
     gl.draws.find((d) => d.name === 'predictFragment').values.previousCount,
-    10000,
+    15000,
   );
   for (let i = 0; i < 112; i++) {
     gl.draws.length = 0;
     fluid.update(job({ particles: true }));
   }
-  assert.equal(fluid.count, 12000);
+  assert.equal(fluid.count, 17000);
   fluid.update(
-    job({ actions: [{ type: 'drain', amount: 12000 }], paused: true }),
+    job({ actions: [{ type: 'drain', amount: 30000 }], paused: true }),
   );
   assert.equal(fluid.count, 0);
   assert.equal(gl.draws.at(-1).instances, 0);
   fluid.update(job({ actions: [{ type: 'reset' }], paused: true }));
-  assert.equal(fluid.count, 10000);
+  assert.equal(fluid.count, 15000);
   assert.equal(fluid.time, 0);
   gl.draws.length = 0;
   fluid.update(job({ elapsed: 10, speed: 2 }));
@@ -187,4 +188,23 @@ test('GPU actions retain count limits, staged injection, reset, and fixed timest
 
 test('unsupported GPU reports a capability error instead of silently reverting to CPU', () => {
   assert.throws(() => new GpuFluid(recordingGL(false)), /浮点渲染支持/);
+});
+
+test('30,000 quality uses full sort range; switching back resets scale and restores smaller sort', () => {
+  const gl = recordingGL(),
+    fluid = new GpuFluid(gl);
+  fluid.update(
+    job({ actions: [{ type: 'quality', count: 30000 }], paused: true }),
+  );
+  assert.equal(fluid.count, 30000);
+  assert.equal(gl.draws.filter((d) => d.name === 'sortFragment').length, 120);
+  const shape = gl.draws.find((d) => d.name === 'geometryFragment');
+  assert.ok(shape);
+  assert.ok(Math.abs(shape.values.particleScale - Math.cbrt(1 / 3)) < 1e-9);
+  gl.draws.length = 0;
+  fluid.update(
+    job({ actions: [{ type: 'quality', count: 15000 }], paused: true }),
+  );
+  assert.equal(fluid.count, 15000);
+  assert.equal(gl.draws.filter((d) => d.name === 'sortFragment').length, 105);
 });
