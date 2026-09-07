@@ -43,7 +43,10 @@ export class GpuFluid {
   private keysTemp: Target;
   private ranges: Target;
   private lambda: Target;
+  private divergenceFactor: Target;
   private atlas: Target;
+  private surfaceTemp: Target;
+  private surfaceFiltered: Target;
   private bounds: Target[] = [];
   private geometry: Target[] = [];
   private sortedPosition: Target;
@@ -76,7 +79,10 @@ export class GpuFluid {
       this.keysTemp = this.target();
       this.ranges = this.target(PARTICLE_WIDTH, 120);
       this.lambda = this.target();
+      this.divergenceFactor = this.target();
       this.atlas = this.target(...GPU_ATLAS_SIZE, true);
+      this.surfaceTemp = this.target(...GPU_ATLAS_SIZE, true);
+      this.surfaceFiltered = this.target(...GPU_ATLAS_SIZE, true);
       for (
         let width = 128, height = 64;
         width >= 1;
@@ -109,7 +115,11 @@ export class GpuFluid {
         'correct',
         'velocity',
         'viscosity',
+        'divergenceFactor',
+        'divergenceResidual',
+        'divergenceProject',
         'volume',
+        'surfaceFilter',
       ]) {
         const sources = shaders as unknown as Record<string, string>;
         this.programs.set(
@@ -130,7 +140,7 @@ export class GpuFluid {
     return this.position.texture;
   }
   get volume() {
-    return this.atlas.texture;
+    return this.surfaceTemp.texture;
   }
   get volumeBounds() {
     return this.bounds[this.bounds.length - 1].texture;
@@ -230,6 +240,9 @@ export class GpuFluid {
       'correct',
       'velocity',
       'viscosity',
+      'divergenceFactor',
+      'divergenceResidual',
+      'divergenceProject',
       'geometry',
       'reorder',
     ].includes(name);
@@ -456,6 +469,25 @@ export class GpuFluid {
         },
         { viscosity: job.forces.viscosity },
       );
+      this.run('divergenceFactor', this.divergenceFactor, {
+        positions: this.predicted,
+        ...neighborInputs,
+      });
+      for (let iteration = 0; iteration < 2; iteration++) {
+        this.run('divergenceResidual', this.lambda, {
+          positions: this.predicted,
+          velocities: this.velocity,
+          factors: this.divergenceFactor,
+          ...neighborInputs,
+        });
+        this.run('divergenceProject', this.velocityTemp, {
+          positions: this.predicted,
+          velocities: this.velocity,
+          lambdas: this.lambda,
+          ...neighborInputs,
+        });
+        [this.velocity, this.velocityTemp] = [this.velocityTemp, this.velocity];
+      }
       [this.position, this.predicted] = [this.predicted, this.position];
       this.accumulator -= 1 / 60;
       this.time += 1 / 60;
@@ -489,6 +521,24 @@ export class GpuFluid {
         metric1: this.geometry[2],
         metric2: this.geometry[3],
       });
+      this.run(
+        'surfaceFilter',
+        this.surfaceTemp,
+        { source: this.atlas, guide: this.atlas },
+        { axis: [1, 0, 0] },
+      );
+      this.run(
+        'surfaceFilter',
+        this.surfaceFiltered,
+        { source: this.surfaceTemp, guide: this.atlas },
+        { axis: [0, 1, 0] },
+      );
+      this.run(
+        'surfaceFilter',
+        this.surfaceTemp,
+        { source: this.surfaceFiltered, guide: this.atlas },
+        { axis: [0, 0, 1] },
+      );
       this.dirty = false;
     }
     this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);

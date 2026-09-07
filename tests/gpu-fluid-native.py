@@ -45,7 +45,7 @@ def compile_program(v,f):
         log=c.create_string_buffer(10000);G.glGetProgramInfoLog(program,10000,None,log);raise AssertionError(log.value.decode())
     return program
 programs={}
-for name in ['neighborProbe','reorder','geometry','bounds','initialize','predict','key','sort','ranges','lambda','correct','velocity','viscosity','volume']:
+for name in ['surfaceFilter','divergenceFactor','divergenceResidual','divergenceProject','neighborProbe','reorder','geometry','bounds','initialize','predict','key','sort','ranges','lambda','correct','velocity','viscosity','volume']:
     programs[name]=compile_program(sources['volumeVertex' if name=='volume' else 'computeVertex'],sources[name+'Fragment'])
 compile_program(sources['fullscreenVertex'],sources['surfaceFragment'])
 compile_program(sources['particleVertex'],sources['particleFragment'])
@@ -64,8 +64,9 @@ quality=int(sys.argv[1]) if len(sys.argv)>1 else 15000
 count=quality
 scale=(10000/quality)**(1/3)
 sort_count=16384 if count<=16384 else 32768
-T={name:target() for name in ['pos','pred','corr','vel','veltmp','keys','keytmp','lambda','geometry','metric0','metric1','metric2','sortpos','sortold','sortvel']}
+T={name:target() for name in ['pos','pred','corr','vel','veltmp','keys','keytmp','lambda','geometry','metric0','metric1','metric2','sortpos','sortold','sortvel','factor']}
 T['ranges']=target(256,120);T['atlas']=target(1024,1920,True)
+T['surfaceTemp']=target(1024,1920,True);T['surfaceFiltered']=target(1024,1920,True)
 G.glBindFramebuffer(0x8D40,T['geometry'][1])
 for attachment,name in enumerate(['metric0','metric1','metric2'],1):G.glFramebufferTexture2D(0x8D40,0x8CE0+attachment,0x0DE1,T[name][0],0)
 G.glDrawBuffers(4,(U*4)(0x8CE0,0x8CE1,0x8CE2,0x8CE3))
@@ -77,7 +78,7 @@ def run(name,out,inputs={},values={}):
     G.glUniform1i(G.glGetUniformLocation(p,b'sortCount'),sort_count)
     G.glUniform1f(G.glGetUniformLocation(p,b'particleScale'),scale)
     if name in ['key','sort']:G.glViewport(0,0,256,sort_count//256)
-    elif name in ['predict','lambda','correct','velocity','viscosity','geometry','reorder']:G.glViewport(0,0,256,max(1,math.ceil(count/256)))
+    elif name in ['predict','lambda','correct','velocity','viscosity','geometry','reorder','divergenceFactor','divergenceResidual','divergenceProject']:G.glViewport(0,0,256,max(1,math.ceil(count/256)))
     for unit,(uniform,tex) in enumerate(inputs.items()):
         assert T[tex]!=t
         G.glActiveTexture(0x84C0+unit);G.glBindTexture(0x0DE1,T[tex][0]);G.glUniform1i(G.glGetUniformLocation(p,uniform.encode()),unit)
@@ -90,6 +91,11 @@ def run(name,out,inputs={},values={}):
         G.glClearColor(0,0,0,0);G.glClear(0x4000);G.glEnable(0x0BE2);G.glBlendFunc(1,1);G.glDrawArraysInstanced(4,0,6,count*20);G.glDisable(0x0BE2)
     else:G.glDrawArrays(4,0,3)
     error=G.glGetError();assert error==0,(name,hex(error))
+def filter_surface():
+    run('surfaceFilter','surfaceTemp',{'source':'atlas','guide':'atlas'},{'axis':[1,0,0]})
+    run('surfaceFilter','surfaceFiltered',{'source':'surfaceTemp','guide':'atlas'},{'axis':[0,1,0]})
+    run('surfaceFilter','surfaceTemp',{'source':'surfaceFiltered','guide':'atlas'},{'axis':[0,0,1]})
+
 def read(name):
     t=T[name];G.glBindFramebuffer(0x8D40,t[1]);a=(F*(t[2]*t[3]*4))();G.glReadPixels(0,0,t[2],t[3],0x1908,0x1406,a);assert G.glGetError()==0;return a
 
@@ -116,13 +122,19 @@ def reorder(predicted,previous):
     T[source],T['sortpos']=T['sortpos'],T[source]
     T['vel'],T['sortvel']=T['sortvel'],T['vel']
 
-def step(t=0,gravity=9.8,splash=(0,0,0),previous=None):
+def step(t=0,gravity=9.8,splash=(0,0,0),previous=None,projection=True):
     run('predict','pred',{'positions':'pos','velocities':'vel'},{'dt':1/60,'time':t,'gravity':gravity,'agitation':0,'shake':0,'previousCount':count if previous is None else previous,'brush':[0,0,0,0],'brushVelocity':[0,0],'pourAt':[0,0],'splash':splash})
     grid('pred');reorder(True,count if previous is None else previous);ni={'sortedKeys':'keys','cellRanges':'ranges'}
     for _ in range(3 if quality==30000 else 2):
         run('lambda','lambda',{'positions':'pred',**ni});run('correct','corr',{'positions':'pred','lambdas':'lambda',**ni});T['pred'],T['corr']=T['corr'],T['pred']
     run('velocity','veltmp',{'positions':'pred','oldPositions':'sortold'},{'dt':1/60,'previousCount':count if previous is None else previous})
-    run('viscosity','vel',{'positions':'pred','velocities':'veltmp',**ni},{'viscosity':.025});T['pos'],T['pred']=T['pred'],T['pos']
+    run('viscosity','vel',{'positions':'pred','velocities':'veltmp',**ni},{'viscosity':.025})
+    if projection:
+        run('divergenceFactor','factor',{'positions':'pred',**ni})
+        for _ in range(2):
+            run('divergenceResidual','lambda',{'positions':'pred','velocities':'vel','factors':'factor',**ni})
+            run('divergenceProject','veltmp',{'positions':'pred','velocities':'vel','lambdas':'lambda',**ni});T['vel'],T['veltmp']=T['veltmp'],T['vel']
+    T['pos'],T['pred']=T['pred'],T['pos']
 run('initialize','pos');initial=read('pos');assert sum(initial[4*i+3]>.5 for i in range(32768))==quality
 assert len({tuple(initial[4*i:4*i+3]) for i in range(count)})==quality
 print('PASS:',quality,'unique initialized GPU particles',flush=True)
@@ -184,6 +196,8 @@ for offset in [0., .25, .5, .75]:
         G.glBindTexture(0x0DE1,T[name][0]);G.glTexSubImage2D(0x0DE1,0,0,0,256,128,0x1908,0x1406,data)
     grid('pos');reorder(False,count);run('geometry','geometry',{'positions':'pos','sortedKeys':'keys','cellRanges':'ranges'})
     run('volume','atlas',volume_inputs);atlas=read('atlas')
+    filter_surface();filtered=read('surfaceTemp')
+    assert all(atlas[j]==filtered[j] for j in range(0,len(atlas),4)), 'isolated spray was altered by bulk filter'
     wet=[]
     for z in range(43,54):
         for y in range(45,56):
@@ -241,6 +255,7 @@ print('Surface RMS: isotropic %.3f mm, covariance %.3f mm'%(isotropic*1000,aniso
 assert anisotropic<max(.0002,isotropic*.9),(anisotropic,isotropic)
 print('PASS: positive definite volume-preserving tensors and bounded surface noise',flush=True)
 count=0;run('volume','atlas',volume_inputs);assert max(read('atlas')[::4])==0
+filter_surface();assert max(read('surfaceTemp')[::4])==0
 print('PASS: empty volume clears without stale water',flush=True)
 # Reorder permutation preserves correlated state; newborn tags survive arbitrary permutation.
 import random
@@ -275,4 +290,30 @@ for i in range(count):
     hits+=n
 assert hits>200
 print('PASS: culled direct traversal matches brute force after maximum corrections',hits,'neighbours',flush=True)
+# Projection should remove compression, not indiscriminately damp moving water.
+count=quality;state=(F*(256*128*4))(*initial)
+for i in range(count):state[i*4+1]+=.6
+upload('pos',state);grid('pos');reorder(False,count);state=read('pos')
+ni={'positions':'pos','cellRanges':'ranges'}
+run('divergenceFactor','factor',ni)
+for flow in ['rigid','compressing']:
+    velocity=(F*(256*128*4))()
+    for i in range(count):
+        x,y,z=state[i*4:i*4+3]
+        velocity[i*4:i*4+3]=[1.1-z,.2,-.4+x] if flow=='rigid' else [-x*.5,-(y+.15)*.5,-z*.5]
+    upload('vel',velocity)
+    run('divergenceResidual','lambda',{**ni,'velocities':'vel','factors':'factor'})
+    before=read('lambda');before_rate=sum(max(0,before[i*4+1]) for i in range(count))
+    for _ in range(2):
+        run('divergenceResidual','lambda',{**ni,'velocities':'vel','factors':'factor'})
+        run('divergenceProject','veltmp',{**ni,'velocities':'vel','lambdas':'lambda'});T['vel'],T['veltmp']=T['veltmp'],T['vel']
+    projected=read('vel')
+    if flow=='rigid':assert max(abs(projected[i]-velocity[i]) for i in range(count*4))<1e-5
+    else:
+        run('divergenceResidual','lambda',{**ni,'velocities':'vel','factors':'factor'})
+        residual=read('lambda');after_rate=sum(max(0,residual[i*4+1]) for i in range(count))
+        assert after_rate<before_rate*.95,(after_rate,before_rate)
+        for axis in range(3):assert abs(sum(projected[i*4+axis]-velocity[i*4+axis] for i in range(count))/count)<1e-6
+        print('PASS: compression projection reduces positive density rate %.1f%% and preserves momentum'%((1-after_rate/before_rate)*100),flush=True)
+print('PASS: uniform translation plus rigid rotation is preserved by projection',flush=True)
 print('All native GPU checks passed.',flush=True)

@@ -151,6 +151,45 @@ void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positi
  ${neighbors('delta+=(readAt(velocities,j).xyz-v)*q*q;')}
  result=vec4(limited(v+delta*(.002+viscosity*.065),12.),0.);
 }`;
+/** DFSPH velocity projection (Bender & Koschier, equations 9–11).
+ * Equal-mass, normalized-density formulation; positive compression only.
+ * The position solver remains PBF: this is a hybrid, not the full DFSPH integrator. */
+export const divergenceFactorFragment =
+  common +
+  `
+out vec4 result;
+void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positions,i).xyz;
+ float rho=0.,sum=0.,nearby=0.;vec3 grad=vec3(0.);
+ ${neighbors('rho+=q*q;grad+=gradient;sum+=dot(gradient,gradient);nearby+=1.;')}
+ // Sparse ballistic spray has no reliable divergence estimate.
+ float factor=nearby>=12.&&rho>REST*.4?1./max(sum+dot(grad,grad),1e-6):0.;
+ result=vec4(factor,rho/REST,nearby,0.);
+}`;
+export const divergenceResidualFragment =
+  common +
+  `
+uniform sampler2D factors;
+out vec4 result;
+void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positions,i).xyz,v=readAt(velocities,i).xyz;
+ float rate=0.;
+ ${neighbors('rate+=dot(readAt(velocities,j).xyz-v,gradient);')}
+ vec4 f=readAt(factors,i);
+ result=vec4(max(rate,0.)*f.x,rate,f.y,0.);
+}`;
+export const divergenceProjectFragment =
+  common +
+  `
+out vec4 result;
+void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positions,i).xyz,v=readAt(velocities,i).xyz;
+ float pressure=readAt(lambdas,i).x;vec3 delta=vec3(0.);
+ ${neighbors('delta+=(pressure+readAt(lambdas,j).x)*gradient;')}
+ // Relaxed Jacobi, with a non-penetrating slip boundary after projection.
+ v=limited(v+.5*delta,12.);
+ if(p.x<=-1.77999)v.x=max(v.x,0.);if(p.x>=1.77999)v.x=min(v.x,0.);
+ if(p.y<=-.91699)v.y=max(v.y,0.);if(p.y>=3.79999)v.y=min(v.y,0.);
+ if(p.z<=-1.27999)v.z=max(v.z,0.);if(p.z>=1.27999)v.z=min(v.z,0.);
+ result=vec4(v,0.);
+}`;
 /** Yu & Turk inspired covariance kernels and render-only centre smoothing.
  * Regularization replaces their explicit eigenvalue clamp; not a verbatim paper implementation. */
 export const geometryFragment =
@@ -218,6 +257,47 @@ in float weight;
 flat in mat3 metric;
 out vec4 result;
 void main(){float r2=dot(local,metric*local);if(r2>=1.)discard;float q=1.-r2;result=vec4(q*q*q*weight,0.,0.,1.);}`;
+/** Separable, world-space reconstruction filter. A raw-density guide disables it
+ * for isolated spray (whose kernel peak is <= 1.8), preserving small droplets.
+ * Atlas neighbours are addressed in 3D: never sample across adjacent atlas tiles. */
+export const surfaceFilterFragment = `#version 300 es
+precision highp float;
+precision highp int;
+uniform highp sampler2D source, guide;
+uniform vec3 axis;
+out vec4 result;
+ivec2 atlasUV(ivec3 p){
+ p=clamp(p,ivec3(0),ivec3(127,159,95));
+ return ivec2((p.z%8)*128+p.x,(p.z/8)*160+p.y);
+}
+void main(){
+ ivec2 pixel=ivec2(gl_FragCoord.xy);
+ ivec3 p=ivec3(pixel.x%128,pixel.y%160,(pixel.x/128)+(pixel.y/160)*8);
+ float center=texelFetch(source,pixel,0).r;
+ // Most of the atlas is air. Preserve its empty support and skip the stencil.
+ if(center<.02){result=vec4(center,0.,0.,1.);return;}
+ float sum=0.,peak=0.;
+ for(int k=-2;k<=2;k++){
+  ivec2 at=atlasUV(p+ivec3(axis)*k);
+  float w=k==0?6.:(abs(k)==1?4.:1.);
+  sum+=texelFetch(source,at,0).r*w;
+  peak=max(peak,texelFetch(guide,at,0).r);
+ }
+ // Connectivity must be independent of the current filter axis; otherwise a
+ // flat horizontal surface would be smoothed vertically but not tangentially.
+ for(int a=0;a<3;a++){
+  ivec3 offset=ivec3(0);offset[a]=2;
+  peak=max(peak,max(texelFetch(guide,atlasUV(p+offset),0).r,texelFetch(guide,atlasUV(p-offset),0).r));
+ }
+ vec3 gradient=vec3(
+  texelFetch(guide,atlasUV(p+ivec3(1,0,0)),0).r-texelFetch(guide,atlasUV(p-ivec3(1,0,0)),0).r,
+  texelFetch(guide,atlasUV(p+ivec3(0,1,0)),0).r-texelFetch(guide,atlasUV(p-ivec3(0,1,0)),0).r,
+  texelFetch(guide,atlasUV(p+ivec3(0,0,1)),0).r-texelFetch(guide,atlasUV(p-ivec3(0,0,1)),0).r);
+ // Smooth mainly along the surface, limiting expansion across its normal.
+ float normalWeight=pow(dot(gradient,axis),2.)/max(dot(gradient,gradient),1e-8);
+ float blend=smoothstep(1.85,4.,peak)*.85*(1.-.95*normalWeight);
+ result=vec4(mix(center,sum/16.,blend),0.,0.,1.);
+}`;
 /** Parallel max reduction provides tight ray bounds without a CPU readback. */
 export const boundsFragment = `#version 300 es
 precision highp float;

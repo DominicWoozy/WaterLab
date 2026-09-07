@@ -19,11 +19,13 @@ raw_grid=grid
 
 def grid(p):return timed('grid',lambda:raw_grid(p))
 run('initialize','pos')
+baseline='--baseline' in sys.argv
 for frame in range(80):
     collecting=frame>=20
-    step(frame/60)
+    step(frame/60,projection=not baseline)
     run('geometry','geometry',{'positions':'pos','sortedKeys':'keys','cellRanges':'ranges'})
     run('volume','atlas',volume_inputs)
+    if not baseline:filter_surface()
     G.glFinish()
     for name,q in query_log:
         result=c.c_uint64();G.glGetQueryObjectui64v(q,0x8866,c.byref(result));samples.setdefault(name,[]).append(result.value/1e6)
@@ -31,4 +33,4 @@ for frame in range(80):
     query_log.clear()
 result={name:round(sum(values)/60,4) for name,values in samples.items()}
 result['total']=round(sum(result.values()),4)
-print('BENCHMARK',json.dumps({'particles':quality,'gpu_ms_per_step_and_surface':result}),flush=True)
+print('BENCHMARK',json.dumps({'particles':quality,'baseline':baseline,'gpu_ms_per_step_and_surface':result}),flush=True)

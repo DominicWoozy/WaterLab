@@ -132,6 +132,18 @@ test('GPU update dispatches full physics, volume and bounds without state readba
   assert.equal(gl.draws.filter((d) => d.name === 'correctFragment').length, 2);
   assert.equal(gl.draws.filter((d) => d.name === 'boundsFragment').length, 8);
   assert.equal(
+    gl.draws.filter((d) => d.name === 'divergenceFactorFragment').length,
+    1,
+  );
+  assert.equal(
+    gl.draws.filter((d) => d.name === 'divergenceProjectFragment').length,
+    2,
+  );
+  assert.equal(
+    gl.draws.filter((d) => d.name === 'surfaceFilterFragment').length,
+    3,
+  );
+  assert.equal(
     gl.draws.find((d) => d.name === 'volumeFragment').instances,
     300000,
   );
@@ -177,7 +189,10 @@ test('GPU actions retain count limits, staged injection, reset, and fixed timest
     job({ actions: [{ type: 'drain', amount: 30000 }], paused: true }),
   );
   assert.equal(fluid.count, 0);
-  assert.equal(gl.draws.at(-1).instances, 0);
+  assert.equal(
+    gl.draws.findLast((d) => d.name === 'volumeFragment').instances,
+    0,
+  );
   fluid.update(job({ actions: [{ type: 'reset' }], paused: true }));
   assert.equal(fluid.count, 15000);
   assert.equal(fluid.time, 0);
