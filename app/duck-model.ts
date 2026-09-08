@@ -32,9 +32,12 @@ export function loadDuckModel(
     triangles = texture(),
     albedo = texture();
   const fetchAsset = async (file: string) => {
-    const response = await fetch(`/models/duck/${file}`, {
-      signal: abort.signal,
-    });
+    const response = await fetch(
+      `${process.env.NEXT_PUBLIC_ASSET_BASE || ''}/models/duck/${file}`,
+      {
+        signal: abort.signal,
+      },
+    );
     if (!response.ok) throw new Error(`模型资源加载失败 (${response.status})`);
     return response;
   };

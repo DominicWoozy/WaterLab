@@ -2,6 +2,15 @@
 
 这次实现使用真实的三维粒子状态计算水流，不再通过固定矩形的波浪高度场制造运动。
 
+## GitHub 自动部署
+
+- 仓库：https://github.com/DominicWoozy/WaterLab
+- 网站：https://dominicwoozy.github.io/WaterLab/
+- 每次推送 `main`，GitHub Actions 会安装锁定依赖、检查类型及 GPU 调度、构建静态网页，然后部署到 GitHub Pages。Pull Request 只构建和检查，不发布。
+- 工作流：`.github/workflows/pages.yml`。使用 GitHub 自带的 `GITHUB_TOKEN` 和 OIDC，无须配置个人访问令牌或 Cloudflare 密钥。
+- GitHub Pages 发布目录为 `dist/pages`，通过 `vite.pages.config.ts` 和 `app/pages-entry.tsx` 直接复用现有的水体页面、WebGL 模拟及鸭子模型。GitHub 项目子路径由 Pages 配置传入，资源不会错误地加载到域名根目录。
+- 本地验证 Pages 构建：`PAGES_BASE_PATH=/WaterLab npm run build:pages`，随后运行 `PAGES_BASE_PATH=/WaterLab node scripts/check-pages.mjs`。原有 `npm run dev` / `npm run build` 继续用于 Sites；GitHub 自动部署仅更新上面的 GitHub Pages 地址。
+
 ## 运行与检查
 
 ```sh

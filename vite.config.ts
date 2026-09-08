@@ -46,6 +46,7 @@ export default defineConfig(async () => {
 
   return {
     css: { postcss: { plugins: [tailwindcss()] } },
+    define: { 'process.env.NEXT_PUBLIC_ASSET_BASE': JSON.stringify('') },
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
