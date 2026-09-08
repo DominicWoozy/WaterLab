@@ -1,0 +1,238 @@
+// Native Metal end-to-end benchmark; browser presentation/compositor is excluded.
+import assert from 'node:assert/strict';
+import { create, globals } from 'webgpu';
+import { WebGPUSimulation } from '../app/webgpu/simulation.ts';
+import { WebGPUVolume } from '../app/webgpu/volume.ts';
+import { WebGPURenderer } from '../app/webgpu/renderer.ts';
+import { readFile, writeFile } from 'node:fs/promises';
+import { deflateSync } from 'node:zlib';
+Object.assign(globalThis, globals);
+const gpu = create(['backend=metal']);
+globalThis.nativeGPU = gpu;
+const adapter = await gpu.requestAdapter();
+const features =
+  !process.env.UNFILTERED && adapter.features.has('float32-filterable')
+    ? ['float32-filterable']
+    : [];
+const device = await adapter.requestDevice({ requiredFeatures: features });
+const errors = [];
+let lost;
+device.addEventListener('uncapturederror', (e) => errors.push(e.error.message));
+device.lost.then((info) => {
+  lost = info;
+});
+const sim = await WebGPUSimulation.create(device);
+const volume = await WebGPUVolume.create(device);
+const renderer = await WebGPURenderer.create(device, 'rgba8unorm');
+const b = await readFile('public/models/duck/bvh.bin'),
+  t = await readFile('public/models/duck/triangles.bin');
+renderer.setModel(
+  b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength),
+  t.buffer.slice(t.byteOffset, t.byteOffset + t.byteLength),
+);
+const n = Number(process.argv[2] || 50000),
+  w = 1250,
+  h = 800,
+  frames = 80;
+const image = device.createTexture({
+  size: [w, h],
+  format: 'rgba8unorm',
+  usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+});
+let e = device.createCommandEncoder();
+sim.reset(e, n);
+device.queue.submit([e.finish()]);
+const forces = { gravity: 9.8, viscosity: 0.025, agitation: 0 };
+for (let i = 0; i < 120; i++) {
+  e = device.createCommandEncoder();
+  sim.step(e, { forces });
+  device.queue.submit([e.finish()]);
+  if (i % 2 === 1) await device.queue.onSubmittedWorkDone();
+}
+const norm = (a) => {
+  const n = Math.hypot(...a);
+  return a.map((v) => v / n);
+};
+const cross = (a, b) => [
+  a[1] * b[2] - a[2] * b[1],
+  a[2] * b[0] - a[0] * b[2],
+  a[0] * b[1] - a[1] * b[0],
+];
+const eye = [
+    Math.sin(0.58) * Math.cos(0.49) * 8,
+    Math.sin(0.49) * 8,
+    Math.cos(0.58) * Math.cos(0.49) * 8,
+  ],
+  forward = norm([-eye[0], -0.05 - eye[1], -eye[2]]),
+  right = norm(cross(forward, [0, 1, 0])),
+  up = cross(right, forward);
+const pairs = [];
+const phases = { physics: [], density: [], render: [] };
+const profile = process.env.PROFILE === '1';
+const split = !profile && process.env.SPLIT !== '0';
+let start = performance.now();
+for (let frame = 0; frame < frames; frame++) {
+  const commands = [];
+  e = device.createCommandEncoder();
+  sim.step(e, { forces });
+  let phaseStart = performance.now();
+  if (profile) {
+    device.queue.submit([e.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    if (frame >= 20) phases.physics.push(performance.now() - phaseStart);
+    phaseStart = performance.now();
+    e = device.createCommandEncoder();
+  }
+  if (split) {
+    commands.push(e.finish());
+    e = device.createCommandEncoder();
+  }
+  volume.encode(e, sim);
+  if (profile) {
+    device.queue.submit([e.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    if (frame >= 20) phases.density.push(performance.now() - phaseStart);
+    phaseStart = performance.now();
+    e = device.createCommandEncoder();
+  }
+  if (split) {
+    commands.push(e.finish());
+    e = device.createCommandEncoder();
+  }
+  renderer.encode(
+    e,
+    image.createView(),
+    sim,
+    volume,
+    { eye, forward, right, up },
+    w,
+    h,
+    { light: 1.3, reflection: true, caustics: true, particles: false },
+  );
+  device.queue.submit([...commands, e.finish()]);
+  if (profile) {
+    await device.queue.onSubmittedWorkDone();
+    if (frame >= 20) phases.render.push(performance.now() - phaseStart);
+  }
+  if (frame % 2 === 1) {
+    await device.queue.onSubmittedWorkDone();
+    const now = performance.now();
+    if (frame >= 20) pairs.push((now - start) / 2);
+    start = now;
+  }
+  assert.equal(lost, undefined, JSON.stringify(lost));
+}
+const stride = Math.ceil((w * 4) / 256) * 256;
+const output = device.createBuffer({
+  size: stride * h,
+  usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+});
+const densityCheck = device.createBuffer({
+  size: 16,
+  usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+});
+e = device.createCommandEncoder();
+for (const [i, z] of [12, 48, 84].entries())
+  e.copyBufferToBuffer(
+    volume.density,
+    (64 + 128 * (11 + 160 * z)) * 4,
+    densityCheck,
+    i * 4,
+    4,
+  );
+e.copyTextureToBuffer(
+  { texture: image },
+  { buffer: output, bytesPerRow: stride },
+  [w, h],
+);
+device.queue.submit([e.finish()]);
+await output.mapAsync(GPUMapMode.READ);
+// Keep mapped wrappers alive until exit to avoid a native Dawn Node finalizer bug.
+const range = output.getMappedRange();
+const pixels = new Uint8Array(range.slice(0));
+output.unmap();
+await densityCheck.mapAsync(GPUMapMode.READ);
+const densityRange = densityCheck.getMappedRange();
+const densities = new Float32Array(densityRange.slice(0));
+densityCheck.unmap();
+assert.ok(
+  densities.slice(0, 3).every((v) => v > 1.15),
+  'Water must cover front, middle and back slices',
+);
+assert.ok(
+  pixels.some((v, i) => i % 4 !== 3 && v > 80),
+  'Rendered frame must contain scene colors',
+);
+assert.ok(
+  pixels.some((v, i) => i % 4 !== 3 && v < 50),
+  'Rendered frame must contain scene contrast',
+);
+assert.deepEqual(errors, []);
+assert.equal(lost, undefined, JSON.stringify(lost));
+const crc32 = (buf) => {
+  let c = 0xffffffff;
+  for (const v of buf) {
+    c ^= v;
+    for (let i = 0; i < 8; i++) c = (c >>> 1) ^ (c & 1 ? 0xedb88320 : 0);
+  }
+  return (c ^ 0xffffffff) >>> 0;
+};
+const chunk = (name, body) => {
+  const tag = Buffer.from(name),
+    len = Buffer.alloc(4),
+    crc = Buffer.alloc(4);
+  len.writeUInt32BE(body.length);
+  crc.writeUInt32BE(crc32(Buffer.concat([tag, body])));
+  return Buffer.concat([len, tag, body, crc]);
+};
+const header = Buffer.alloc(13);
+header.writeUInt32BE(w);
+header.writeUInt32BE(h, 4);
+header[8] = 8;
+header[9] = 6;
+const scanlines = Buffer.alloc((w * 4 + 1) * h);
+for (let y = 0; y < h; y++)
+  scanlines.set(
+    pixels.subarray(y * stride, y * stride + w * 4),
+    y * (w * 4 + 1) + 1,
+  );
+const path = `/private/tmp/water-webgpu-${n}.png`;
+await writeFile(
+  path,
+  Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk('IHDR', header),
+    chunk('IDAT', deflateSync(scanlines)),
+    chunk('IEND', Buffer.alloc(0)),
+  ]),
+);
+const sorted = [...pairs].sort((a, b) => a - b);
+console.log(
+  JSON.stringify(
+    {
+      particles: n,
+      resolution: [w, h],
+      features,
+      completed_frame_ms: {
+        mean: pairs.reduce((a, b) => a + b) / pairs.length,
+        p50: sorted[Math.floor(sorted.length * 0.5)],
+        p95: sorted[Math.floor(sorted.length * 0.95)],
+      },
+      image: path,
+      split,
+      synchronized_phase_ms: profile
+        ? Object.fromEntries(
+            Object.entries(phases).map(([k, v]) => [
+              k,
+              v.reduce((a, b) => a + b) / v.length,
+            ]),
+          )
+        : undefined,
+      errors,
+    },
+    null,
+    2,
+  ),
+);
+await device.queue.onSubmittedWorkDone();
+process.exit(0);

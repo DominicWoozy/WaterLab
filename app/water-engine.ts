@@ -40,8 +40,14 @@ export const defaults: WaterSettings = {
   paused: false,
   mode: 'stir',
 };
-export type WaterStats = { fps: number; count: number };
-export function createWater(
+export type WaterStats = {
+  fps: number;
+  count: number;
+  quality?: ParticleQuality;
+  capacity?: number;
+  backend?: 'WebGPU' | 'WebGL2';
+};
+export function createWebGLWater(
   canvas: HTMLCanvasElement,
   getSettings: () => WaterSettings,
   onStats: (stats: WaterStats) => void,
@@ -297,6 +303,9 @@ export function createWater(
       onStats({
         fps: Math.round((frames * 1000) / (now - statTime)),
         count: fluid.count,
+        quality: fluid.quality,
+        capacity: 30000,
+        backend: 'WebGL2',
       });
       const measured = (frames * 1000) / (now - statTime);
       const nextScale =
@@ -417,6 +426,7 @@ export function createWater(
   raf = requestAnimationFrame(render);
   return {
     setQuality: (count: ParticleQuality) => {
+      if (count === 50000) count = 30000;
       actions.length = 0;
       actions.push({ type: 'quality', count });
       pointer = null;
@@ -459,6 +469,88 @@ export function createWater(
       gl.deleteVertexArray(particleVAO);
       quadVAOs.forEach((v) => gl.deleteVertexArray(v));
       programs.forEach((p) => gl.deleteProgram(p));
+    },
+  };
+}
+
+/** Prepare the full WebGPU backend before acquiring the canvas context, so a
+ * capability/compilation failure can still fall back to WebGL2 on the same canvas. */
+export function createWater(
+  canvas: HTMLCanvasElement,
+  getSettings: () => WaterSettings,
+  onStats: (s: WaterStats) => void,
+  onError: (s: string) => void,
+) {
+  let engine: ReturnType<typeof createWebGLWater> | null = null,
+    disposed = false;
+  const pending: Array<(e: ReturnType<typeof createWebGLWater>) => void> = [];
+  void (async () => {
+    if (
+      navigator.gpu &&
+      new URLSearchParams(location.search).get('backend') !== 'webgl'
+    ) {
+      let device: GPUDevice | undefined;
+      try {
+        const adapter = await navigator.gpu.requestAdapter({
+          powerPreference: 'high-performance',
+        });
+        if (!adapter) throw new Error('WebGPU adapter unavailable');
+        const features: GPUFeatureName[] = [];
+        for (const feature of ['float32-filterable'] as const)
+          if (adapter.features.has(feature)) features.push(feature);
+        device = await adapter.requestDevice({ requiredFeatures: features });
+        const { createWebGPUWater } = await import('./webgpu/engine');
+        if (disposed) {
+          device.destroy();
+          return;
+        }
+        engine = await createWebGPUWater(
+          canvas,
+          getSettings,
+          onStats,
+          onError,
+          device,
+        );
+      } catch (error) {
+        device?.destroy();
+        console.warn('WebGPU initialization failed; using WebGL2', error);
+      }
+    }
+    if (disposed) {
+      engine?.destroy();
+      return;
+    }
+    if (!engine) {
+      engine = createWebGLWater(canvas, getSettings, onStats, onError);
+      onStats({
+        fps: 0,
+        count: 15000,
+        quality: 15000,
+        capacity: 30000,
+        backend: 'WebGL2',
+      });
+    }
+    pending.splice(0).forEach((fn) => fn(engine!));
+  })().catch((error) => {
+    if (!disposed)
+      onError(error instanceof Error ? error.message : '无法启动 GPU 引擎');
+  });
+  const call = (fn: (e: ReturnType<typeof createWebGLWater>) => void) => {
+    if (disposed) return;
+    if (engine) fn(engine);
+    else pending.push(fn);
+  };
+  return {
+    setQuality: (count: ParticleQuality) => call((e) => e.setQuality(count)),
+    ripple: () => call((e) => e.ripple()),
+    shake: () => call((e) => e.shake()),
+    pour: () => call((e) => e.pour()),
+    drain: () => call((e) => e.drain()),
+    reset: () => call((e) => e.reset()),
+    destroy: () => {
+      disposed = true;
+      pending.length = 0;
+      engine?.destroy();
     },
   };
 }

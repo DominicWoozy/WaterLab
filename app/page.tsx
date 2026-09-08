@@ -86,7 +86,10 @@ export default function Home() {
       engine.current = createWater(
         canvas.current!,
         () => current.current,
-        setStats,
+        (next) => {
+          setStats(next);
+          if (next.quality) setQuality(next.quality);
+        },
         setError,
       );
       setReady(true);
@@ -160,7 +163,7 @@ export default function Home() {
         <div className="header-right">
           <span className="live-dot" />
           <span>粒子流体</span>
-          <span className="version">WEBGL 2 / GPU</span>
+          <span className="version">{stats.backend || 'GPU 初始化'}</span>
         </div>
       </header>
       <section className="scene-title">
@@ -287,21 +290,32 @@ export default function Home() {
                 >
                   <TabsList aria-label="粒子精度">
                     <TabsTrigger value="15000" disabled={!ready || !!error}>
-                      15,000 · 均衡
+                      15,000
                     </TabsTrigger>
                     <TabsTrigger value="30000" disabled={!ready || !!error}>
-                      30,000 · 精细
+                      30,000
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="50000"
+                      disabled={!ready || !!error || stats.backend !== 'WebGPU'}
+                    >
+                      50,000
                     </TabsTrigger>
                   </TabsList>
                 </Tabs>
-                <p>切换会重置水体，水量近似相同；精细模式更耗性能。</p>
+                <p>
+                  切换会重置水体。5 万粒子使用 WebGPU；不支持时自动回退 WebGL2。
+                </p>
               </div>
               <div className="particle-count">
                 <div>
                   <span>水量</span>
                   <output>
                     {stats.count.toLocaleString()}
-                    <small> / {CAPACITY.toLocaleString()} 粒子</small>
+                    <small>
+                      {' '}
+                      / {(stats.capacity ?? CAPACITY).toLocaleString()} 粒子
+                    </small>
                   </output>
                 </div>
                 <div className="quantity-buttons">
@@ -314,7 +328,11 @@ export default function Home() {
                   </button>
                   <button
                     aria-label="注入 500 个水粒子"
-                    disabled={!ready || !!error || stats.count >= CAPACITY}
+                    disabled={
+                      !ready ||
+                      !!error ||
+                      stats.count >= (stats.capacity ?? CAPACITY)
+                    }
                     onClick={() => act('pour')}
                   >
                     <Plus size={15} />

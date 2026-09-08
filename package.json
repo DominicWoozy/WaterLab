@@ -12,7 +12,9 @@
     "lint": "oxlint",
     "format": "oxfmt",
     "build:pages": "vite build --config vite.pages.config.ts",
-    "test:gpu": "node --test tests/gpu-fluid.test.mjs"
+    "test:gpu": "node --test tests/gpu-fluid.test.mjs",
+    "test:webgpu": "node --experimental-strip-types tests/webgpu-numeric.mjs",
+    "benchmark:webgpu": "node --experimental-strip-types tests/webgpu-benchmark.mjs"
   },
   "dependencies": {
     "react": "19.2.6",
@@ -45,12 +47,14 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
+    "@webgpu/types": "^0.1.72",
     "oxfmt": "0.61.0",
     "oxlint": "1.76.0",
     "oxlint-tsgolint": "7.0.2001",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
     "vite": "8.0.13",
+    "webgpu": "^0.6.0",
     "wrangler": "4.92.0"
   },
   "type": "module"

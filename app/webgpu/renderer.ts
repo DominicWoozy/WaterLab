@@ -1,0 +1,305 @@
+import { buffer } from './compute.ts';
+import { renderShader, particlesShader } from './render-shaders.ts';
+import type { WebGPUSimulation } from './simulation.ts';
+import type { WebGPUVolume } from './volume.ts';
+export type Camera = {
+  eye: number[];
+  forward: number[];
+  right: number[];
+  up: number[];
+};
+export class WebGPURenderer {
+  readonly uniform: GPUBuffer;
+  private surface!: GPURenderPipeline;
+  private particles!: GPURenderPipeline;
+  private surfaceLayout: GPUBindGroupLayout;
+  private particleLayout: GPUBindGroupLayout;
+  private densitySampler: GPUSampler;
+  private albedoSampler: GPUSampler;
+  private bvh: GPUBuffer;
+  private triangles: GPUBuffer;
+  private albedo: GPUTexture;
+  private depth: GPUTexture | null = null;
+  private width = 0;
+  private height = 0;
+  private surfaceGroups = new Map<GPUBuffer, GPUBindGroup>();
+  private particleGroups = new Map<GPUBuffer, GPUBindGroup>();
+  private constructor(readonlyDevice: GPUDevice, format: GPUTextureFormat) {
+    this.device = readonlyDevice;
+    this.format = format;
+    const device = readonlyDevice;
+    this.uniform = buffer(
+      device,
+      'scene uniforms',
+      128,
+      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    );
+    this.bvh = buffer(device, 'duck BVH', 16);
+    this.triangles = buffer(device, 'duck triangles', 16);
+    this.albedo = device.createTexture({
+      size: [1, 1],
+      format: 'rgba8unorm',
+      usage:
+        GPUTextureUsage.TEXTURE_BINDING |
+        GPUTextureUsage.COPY_DST |
+        GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    device.queue.writeTexture(
+      { texture: this.albedo },
+      new Uint8Array([255, 195, 20, 255]),
+      { bytesPerRow: 4 },
+      [1, 1],
+    );
+    const filtered = device.features.has('float32-filterable');
+    this.densitySampler = device.createSampler({
+      minFilter: filtered ? 'linear' : 'nearest',
+      magFilter: filtered ? 'linear' : 'nearest',
+    });
+    this.albedoSampler = device.createSampler({
+      minFilter: 'linear',
+      magFilter: 'linear',
+    });
+    const F = GPUShaderStage.FRAGMENT,
+      V = GPUShaderStage.VERTEX;
+    this.surfaceLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: F | V, buffer: { type: 'uniform' } },
+        {
+          binding: 1,
+          visibility: F,
+          texture: {
+            viewDimension: '3d',
+            sampleType: filtered ? 'float' : 'unfilterable-float',
+          },
+        },
+        {
+          binding: 2,
+          visibility: F,
+          sampler: { type: filtered ? 'filtering' : 'non-filtering' },
+        },
+        ...[3, 4, 5, 6].map((binding) => ({
+          binding,
+          visibility: F,
+          buffer: { type: 'read-only-storage' as const },
+        })),
+        { binding: 7, visibility: F, texture: { sampleType: 'float' } },
+        { binding: 8, visibility: F, sampler: { type: 'filtering' } },
+      ],
+    });
+    this.particleLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: F | V, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: V, buffer: { type: 'read-only-storage' } },
+      ],
+    });
+  }
+  readonly device: GPUDevice;
+  readonly format: GPUTextureFormat;
+  static async create(device: GPUDevice, format: GPUTextureFormat) {
+    const r = new WebGPURenderer(device, format);
+    try {
+      for (const [name, code, layout, compare] of [
+        [
+          'surface',
+          renderShader(device.features.has('float32-filterable')),
+          r.surfaceLayout,
+          'always',
+        ],
+        ['particles', particlesShader, r.particleLayout, 'less'],
+      ] as const) {
+        const shaderModule = device.createShaderModule({ label: name, code });
+        const info = await shaderModule.getCompilationInfo();
+        const errors = info.messages.filter((m) => m.type === 'error');
+        if (errors.length)
+          throw new Error(
+            `${name}: ${errors.map((m) => `${m.lineNum} ${m.message}`).join('\n')}`,
+          );
+        r[name] = await device.createRenderPipelineAsync({
+          label: name,
+          layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
+          vertex: { module: shaderModule, entryPoint: 'vertex' },
+          fragment: {
+            module: shaderModule,
+            entryPoint: 'fragment',
+            targets: [{ format }],
+          },
+          primitive: { topology: 'triangle-list' },
+          depthStencil: {
+            format: 'depth32float',
+            depthWriteEnabled: true,
+            depthCompare: compare,
+          },
+        });
+      }
+      return r;
+    } catch (e) {
+      r.destroy();
+      throw e;
+    }
+  }
+  async loadModel(signal?: AbortSignal) {
+    const base = `${process.env.NEXT_PUBLIC_ASSET_BASE || ''}/models/duck/`;
+    const get = async (path: string) => {
+      const r = await fetch(base + path, { signal });
+      if (!r.ok) throw new Error(`鸭子资源加载失败 (${r.status})`);
+      return r;
+    };
+    const [bvh, triangles, image] = await Promise.all([
+      get('bvh.bin').then((r) => r.arrayBuffer()),
+      get('triangles.bin').then((r) => r.arrayBuffer()),
+      get('DuckCM.png').then((r) => r.blob()),
+    ]);
+    const bitmap = await createImageBitmap(image, {
+      imageOrientation: 'none',
+      premultiplyAlpha: 'none',
+      colorSpaceConversion: 'none',
+    });
+    if (signal?.aborted) {
+      bitmap.close();
+      throw new Error('Model loading cancelled');
+    }
+    this.setModel(bvh, triangles, bitmap);
+    bitmap.close();
+  }
+  setModel(bvh: ArrayBuffer, triangles: ArrayBuffer, image?: ImageBitmap) {
+    this.bvh.destroy();
+    this.triangles.destroy();
+    this.bvh = buffer(this.device, 'duck BVH', bvh.byteLength);
+    this.triangles = buffer(
+      this.device,
+      'duck triangles',
+      triangles.byteLength,
+    );
+    this.device.queue.writeBuffer(this.bvh, 0, bvh);
+    this.device.queue.writeBuffer(this.triangles, 0, triangles);
+    if (image) {
+      this.albedo.destroy();
+      this.albedo = this.device.createTexture({
+        size: [image.width, image.height],
+        format: 'rgba8unorm',
+        usage:
+          GPUTextureUsage.COPY_DST |
+          GPUTextureUsage.TEXTURE_BINDING |
+          GPUTextureUsage.RENDER_ATTACHMENT,
+      });
+      this.device.queue.copyExternalImageToTexture(
+        { source: image },
+        { texture: this.albedo },
+        [image.width, image.height],
+      );
+    }
+    this.surfaceGroups.clear();
+    this.ready = true;
+  }
+  ready = false;
+  encode(
+    encoder: GPUCommandEncoder,
+    target: GPUTextureView,
+    sim: WebGPUSimulation,
+    volume: WebGPUVolume,
+    camera: Camera,
+    width: number,
+    height: number,
+    options: {
+      light: number;
+      reflection: boolean;
+      caustics: boolean;
+      particles: boolean;
+      brush?: number[];
+    },
+  ) {
+    if (width !== this.width || height !== this.height) {
+      this.depth?.destroy();
+      this.depth = this.device.createTexture({
+        label: 'scene depth',
+        size: [width, height],
+        format: 'depth32float',
+        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      });
+      this.width = width;
+      this.height = height;
+    }
+    const u = new Float32Array(32);
+    u.set([...camera.eye, 0], 0);
+    u.set([...camera.forward, 0], 4);
+    u.set([...camera.right, 0], 8);
+    u.set([...camera.up, 0], 12);
+    u.set([width, height, width / height > 1.18 ? 0.19 : 0, sim.time], 16);
+    u.set(
+      [
+        options.light,
+        +options.reflection,
+        +options.caustics,
+        +options.particles,
+      ],
+      20,
+    );
+    u.set(options.brush ?? [0, -0.25, 0, 0], 24);
+    u.set([1.15, +this.ready, 0.021, Math.cbrt(10000 / sim.quality)], 28);
+    this.device.queue.writeBuffer(this.uniform, 0, u);
+    let surface = this.surfaceGroups.get(sim.duck);
+    if (!surface) {
+      surface = this.device.createBindGroup({
+        layout: this.surfaceLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.uniform } },
+          { binding: 1, resource: volume.view },
+          { binding: 2, resource: this.densitySampler },
+          { binding: 3, resource: { buffer: volume.bounds } },
+          { binding: 4, resource: { buffer: sim.duck } },
+          { binding: 5, resource: { buffer: this.bvh } },
+          { binding: 6, resource: { buffer: this.triangles } },
+          { binding: 7, resource: this.albedo.createView() },
+          { binding: 8, resource: this.albedoSampler },
+        ],
+      });
+      this.surfaceGroups.set(sim.duck, surface);
+    }
+    const pass = encoder.beginRenderPass({
+      label: 'water and duck',
+      colorAttachments: [
+        {
+          view: target,
+          loadOp: 'clear',
+          storeOp: 'store',
+          clearValue: [0.02, 0.03, 0.04, 1],
+        },
+      ],
+      depthStencilAttachment: {
+        view: this.depth!.createView(),
+        depthLoadOp: 'clear',
+        depthStoreOp: 'store',
+        depthClearValue: 1,
+      },
+    });
+    pass.setPipeline(this.surface);
+    pass.setBindGroup(0, surface);
+    pass.draw(3);
+    if (options.particles) {
+      let group = this.particleGroups.get(sim.state);
+      if (!group) {
+        group = this.device.createBindGroup({
+          layout: this.particleLayout,
+          entries: [
+            { binding: 0, resource: { buffer: this.uniform } },
+            { binding: 1, resource: { buffer: sim.state } },
+          ],
+        });
+        this.particleGroups.set(sim.state, group);
+      }
+      pass.setPipeline(this.particles);
+      pass.setBindGroup(0, group);
+      pass.draw(6, sim.count);
+    }
+    pass.end();
+  }
+  destroy() {
+    this.uniform.destroy();
+    this.bvh.destroy();
+    this.triangles.destroy();
+    this.albedo.destroy();
+    this.depth?.destroy();
+    this.surfaceGroups.clear();
+    this.particleGroups.clear();
+  }
+}
