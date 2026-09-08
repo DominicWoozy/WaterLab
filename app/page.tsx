@@ -181,7 +181,7 @@ export default function Home() {
         <aside className="control-panel">
           <div className="panel-heading">
             <div>
-              <span className="panel-kicker">EXPERIMENT 011</span>
+              <span className="panel-kicker">EXPERIMENT 012</span>
               <h2>自由水流</h2>
             </div>
             <Activity size={19} />
@@ -199,6 +199,23 @@ export default function Home() {
             </TabsList>
             <TabsContent value="water">
               <div className="section-label">流动状态</div>
+              <p
+                style={{
+                  fontSize: '0.875rem',
+                  color: 'var(--muted-foreground)',
+                  margin: '0 0 12px',
+                }}
+              >
+                搅动水面，观察小鸭子随浪漂浮。
+                <a
+                  href="https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Duck"
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ textDecoration: 'underline' }}
+                >
+                  模型 © Sony
+                </a>
+              </p>
               <div className="presets">
                 {['平静', '涌动', '翻涌'].map((p, i) => (
                   <button

@@ -1,3 +1,4 @@
+import { loadDuckModel } from './duck-model';
 import { GPU_VOLUME_SIZE } from './gpu-volume-config';
 import {
   VOLUME_MIN,
@@ -55,6 +56,7 @@ export function createWater(
     throw new Error('水体合成需要 WebGL 2 支持，请启用浏览器硬件加速后重试。');
 
   const fluid = new GpuFluid(gl);
+  const duck = loadDuckModel(gl, onError);
   const actions: GpuFluidAction[] = [];
   let lastUpdate = 0;
   const programs: WebGLProgram[] = [];
@@ -254,6 +256,17 @@ export function createWater(
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, fluid.volumeBounds);
     gl.uniform1i(uniform(surface, 'waterBounds'), 1);
+    for (const [index, name, texture] of [
+      [2, 'duckState', fluid.duck],
+      [3, 'duckBVH', duck.bvh],
+      [4, 'duckTriangles', duck.triangles],
+      [5, 'duckAlbedo', duck.albedo],
+    ] as const) {
+      gl.activeTexture(gl.TEXTURE0 + index);
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.uniform1i(uniform(surface, name), index);
+    }
+    f(surface, 'duckReady', +duck.ready);
     f(surface, 'isoDensity', SURFACE_DENSITY);
     f(surface, 'time', fluid.time);
     f(surface, 'lightPower', s.light);
@@ -262,7 +275,10 @@ export function createWater(
     f(surface, 'particleView', +s.particles);
     f(surface, 'brushOn', +(!!pointer && !pointer.orbit));
     gl.uniform3fv(uniform(surface, 'brush'), pointer?.world || [0, -0.25, 0]);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.ALWAYS);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.disable(gl.DEPTH_TEST);
     if (s.particles) {
       gl.useProgram(particles);
       cameraUniforms(particles);
@@ -437,6 +453,7 @@ export function createWater(
       canvas.removeEventListener('keydown', key);
       canvas.removeEventListener('contextmenu', contextMenu);
       canvas.removeEventListener('webglcontextlost', lost);
+      duck.destroy();
       fluid.destroy();
       gl.deleteBuffer(quadBuffer);
       gl.deleteVertexArray(particleVAO);

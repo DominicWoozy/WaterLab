@@ -53,6 +53,10 @@ export class GpuFluid {
   private surfaceTemp: Target;
   private surfaceFiltered: Target;
   private bounds: Target[] = [];
+  private duckState: Target;
+  private duckTemp: Target;
+  private reactions: Target[][] = [];
+  private reduction: Target[][] = [];
   private geometry: Target[] = [];
   private sortedPosition: Target;
   private sortedOld: Target;
@@ -72,6 +76,21 @@ export class GpuFluid {
       );
     this.vao = gl.createVertexArray()!;
     try {
+      this.duckState = this.target(4, 1);
+      this.duckTemp = this.target(4, 1);
+      this.reactions = [
+        [this.target(), this.target()],
+        [this.target(), this.target()],
+      ];
+      for (
+        let width = 128, height = 64;
+        width >= 1;
+        width /= 2, height = Math.max(1, height / 2)
+      )
+        this.reduction.push([
+          this.target(width, height),
+          this.target(width, height),
+        ]);
       this.position = this.target();
       this.predicted = this.target();
       this.sortedPosition = this.target();
@@ -108,6 +127,10 @@ export class GpuFluid {
       if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
         throw new Error('当前设备无法创建水面重建缓冲。');
       for (const name of [
+        'duckInitialize',
+        'duckPredict',
+        'duckReduce',
+        'duckIntegrate',
         'reorder',
         'geometry',
         'bounds',
@@ -141,6 +164,9 @@ export class GpuFluid {
       this.destroy();
       throw error;
     }
+  }
+  get duck() {
+    return this.duckState.texture;
   }
   get positions() {
     return this.position.texture;
@@ -282,6 +308,9 @@ export class GpuFluid {
       if (integer) gl.uniform1i(location, value);
       else gl.uniform1f(location, value);
     };
+    // All physics programs see the same rigid-body state. Unused samplers are optimized out.
+    if (!name.startsWith('duck') && !Object.hasOwn(inputs, 'duckState'))
+      inputs = { ...inputs, duckState: this.duckState };
     let unit = 0;
     for (const [key, input] of Object.entries(inputs)) {
       if (input === target) throw new Error('GPU 流体缓冲读写冲突');
@@ -291,6 +320,7 @@ export class GpuFluid {
     }
     scalar('count', this.count, true);
     scalar('particleScale', Math.cbrt(10000 / this.quality));
+    scalar('duckEnabled', 1);
     scalar('sortCount', this.sortCount, true);
     scalar('initialCount', this.quality, true);
     for (const [key, value] of Object.entries(values)) {
@@ -324,6 +354,7 @@ export class GpuFluid {
     this.pendingPour = 0;
     this.shakeUntil = 0;
     this.splash = [0, 0, 0];
+    this.run('duckInitialize', this.duckState);
     this.run('initialize', this.position);
     const gl = this.gl;
     for (const t of [this.velocity, this.velocityTemp]) {
@@ -333,6 +364,40 @@ export class GpuFluid {
     }
     this.dirty = true;
     this.densityDirty = true;
+  }
+  private runMRT(
+    name: string,
+    outputs: Target[],
+    inputs: Record<string, Target>,
+    values: Record<string, number | number[]> = {},
+  ) {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, outputs[0].framebuffer);
+    outputs
+      .slice(1)
+      .forEach((t, i) =>
+        gl.framebufferTexture2D(
+          gl.FRAMEBUFFER,
+          gl.COLOR_ATTACHMENT0 + i + 1,
+          gl.TEXTURE_2D,
+          t.texture,
+          0,
+        ),
+      );
+    gl.drawBuffers(outputs.map((_, i) => gl.COLOR_ATTACHMENT0 + i));
+    this.run(name, outputs[0], inputs, values);
+    outputs
+      .slice(1)
+      .forEach((_, i) =>
+        gl.framebufferTexture2D(
+          gl.FRAMEBUFFER,
+          gl.COLOR_ATTACHMENT0 + i + 1,
+          gl.TEXTURE_2D,
+          null,
+          0,
+        ),
+      );
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
   }
   private buildGrid(p: Target) {
     this.sortCount = this.count > 16384 ? 32768 : 16384;
@@ -429,6 +494,13 @@ export class GpuFluid {
         this.accumulator + Math.max(0, Math.min(0.1, job.elapsed)) * job.speed,
       );
     while (this.accumulator + 1e-8 >= 1 / 60) {
+      this.run(
+        'duckPredict',
+        this.duckTemp,
+        { duckState: this.duckState },
+        { dt: 1 / 60, gravity: job.forces.gravity },
+      );
+      [this.duckState, this.duckTemp] = [this.duckTemp, this.duckState];
       const previousCount = this.count,
         b = job.brush;
       if (b?.mode === 'pour') {
@@ -470,11 +542,19 @@ export class GpuFluid {
           positions: this.predicted,
           ...neighborInputs,
         });
-        this.run('correct', this.correction, {
-          positions: this.predicted,
-          lambdas: this.lambda,
-          ...neighborInputs,
-        });
+        this.runMRT(
+          'correct',
+          [this.correction, ...this.reactions[1]],
+          {
+            positions: this.predicted,
+            lambdas: this.lambda,
+            ...neighborInputs,
+            linearSource: this.reactions[0][0],
+            angularSource: this.reactions[0][1],
+          },
+          { reactionReset: +(iteration === 0) },
+        );
+        this.reactions.reverse();
         [this.predicted, this.correction] = [this.correction, this.predicted];
       }
       this.run(
@@ -504,14 +584,37 @@ export class GpuFluid {
           factors: this.divergenceFactor,
           ...neighborInputs,
         });
-        this.run('divergenceProject', this.velocityTemp, {
-          positions: this.predicted,
-          velocities: this.velocity,
-          lambdas: this.lambda,
-          ...neighborInputs,
-        });
+        this.runMRT(
+          'divergenceProject',
+          [this.velocityTemp, ...this.reactions[1]],
+          {
+            positions: this.predicted,
+            velocities: this.velocity,
+            lambdas: this.lambda,
+            ...neighborInputs,
+            linearSource: this.reactions[0][0],
+            angularSource: this.reactions[0][1],
+          },
+        );
+        this.reactions.reverse();
         [this.velocity, this.velocityTemp] = [this.velocityTemp, this.velocity];
       }
+      let reaction = this.reactions[0];
+      for (const pair of this.reduction) {
+        this.runMRT(
+          'duckReduce',
+          pair,
+          { linearSource: reaction[0], angularSource: reaction[1] },
+          { firstLevel: +(reaction === this.reactions[0]) },
+        );
+        reaction = pair;
+      }
+      this.run('duckIntegrate', this.duckTemp, {
+        duckState: this.duckState,
+        linearSource: reaction[0],
+        angularSource: reaction[1],
+      });
+      [this.duckState, this.duckTemp] = [this.duckTemp, this.duckState];
       [this.position, this.predicted] = [this.predicted, this.position];
       this.accumulator -= 1 / 60;
       this.time += 1 / 60;

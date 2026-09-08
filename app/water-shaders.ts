@@ -1,3 +1,4 @@
+import { duckRender } from './duck-shaders.ts';
 import { PARTICLE_WIDTH } from './gpu-particle-config.ts';
 import { GPU_ATLAS_SIZE } from './gpu-volume-config.ts';
 export const fullscreenVertex = `#version 300 es
@@ -70,8 +71,10 @@ vec3 normalAt(vec3 p){
  vec3 n=vec3(density(p-e.xyy)-density(p+e.xyy),density(p-e.yxy)-density(p+e.yxy),density(p-e.yyx)-density(p+e.yyx));
  return length(n)>.00001?normalize(n):vec3(0.,1.,0.);
 }
+vec4 duckTrace(vec3 ro,vec3 rd,float end);
 float opticalPath(vec3 p,vec3 r){
  vec2 hit=boxHit(p,r);float end=max(0.,hit.y);
+ end=duckTrace(p,r,end).x;
  float stepSize=end/72.;float result=0.;
  for(int i=0;i<72;i++){
   float d=density(p+r*(float(i)+.5)*stepSize);
@@ -89,7 +92,8 @@ vec3 sky(vec3 r){
  c+=.06*sin(r.x*13.+sin(r.z*9.))*max(0.,r.y);
  return c;
 }
-vec3 scene(vec3 ro,vec3 rd){
+${duckRender}
+vec3 room(vec3 ro,vec3 rd){
  vec3 c=vec3(.045,.067,.080);
  float t=(-1.075-ro.y)/rd.y;
  if(t>0.){
@@ -126,10 +130,18 @@ vec3 scene(vec3 ro,vec3 rd){
  }
  return c;
 }
+vec3 scene(vec3 ro,vec3 rd){
+ float floorT=(-.97-ro.y)/rd.y;
+ vec4 hit=duckTrace(ro,rd,floorT>0.?floorT:1e5);
+ return hit.y>=0.?duckShade(hit,rd):room(ro,rd);
+}
 void main(){
  volumeTop=texelFetch(waterBounds,ivec2(0),0).y+.36;
- vec3 rd=ray(texcoord);vec3 color=scene(eye,rd);
+ vec3 rd=ray(texcoord);
+ float floorT=(-.97-eye.y)/rd.y;
+ vec4 duck=duckTrace(eye,rd,floorT>0.?floorT:1e5);vec3 color=duck.y>=0.?duckShade(duck,rd):room(eye,rd);
  vec2 interval=boxHit(eye,rd);
+ interval.y=min(interval.y,duck.x);
  float at=max(0.,interval.x),last=at;bool found=false;
  if(particleView<.5&&interval.y>at){
   for(int i=0;i<384;i++){
@@ -150,7 +162,9 @@ void main(){
   vec3 transmission=scene(p+refracted*.006,refracted)*absorb;
   transmission+=vec3(.012,.11,.13)*(1.-absorb)*lightPower*.45;
   float fresnel=.0204+.9796*pow(1.-max(dot(-rd,n),0.),5.);
-  color=mix(transmission,sky(reflect(rd,n)),fresnel*reflectionOn);
+  vec3 reflected=reflect(rd,n);vec4 mirrorDuck=duckTrace(p+reflected*.006,reflected,1e5);
+  vec3 reflection=mirrorDuck.y>=0.?duckShade(mirrorDuck,reflected):sky(reflected);
+  color=mix(transmission,reflection,fresnel*reflectionOn);
   vec3 sun=normalize(vec3(-.6,1.,.35));
   color+=vec3(1.,.97,.9)*pow(max(dot(reflect(rd,n),sun),0.),240.)*lightPower*reflectionOn;
   // Weak caustic accents cannot override absorption or tint thin water opaque.
@@ -163,5 +177,7 @@ void main(){
   if(t>0.){vec3 p=eye+rd*t;float ring=exp(-pow((length(p.xz-brush.xz)-.48)*110.,2.));color+=vec3(.2,.65,.5)*ring*.55;}
  }
  color=1.-exp(-color*1.35);vec2 v=texcoord-.5;color*=1.-.12*dot(v,v);
+ float depth=duck.y>=0.?dot(rd*duck.x,cameraForward):1e5;
+ gl_FragDepth=clamp(1.002004-.1002004/max(.101,depth),0.,1.);
  fragColor=vec4(pow(color,vec3(.91)),1.);
 }`;

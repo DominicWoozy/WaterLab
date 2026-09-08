@@ -309,8 +309,12 @@ test('compute caches redundant GL submissions and restores state after scene ren
   for (const key of Object.keys(gl.counters)) gl.counters[key] = 0;
   gl.draws.length = 0;
   fluid.update(job({ particles: true }));
-  assert.equal(gl.draws[0].name, 'predictFragment');
-  assert.deepEqual(gl.draws[0].viewport, [0, 0, 256, 118]);
+  assert.equal(gl.draws[0].name, 'duckPredictFragment');
+  assert.deepEqual(gl.draws[0].viewport, [0, 0, 4, 1]);
+  assert.deepEqual(
+    gl.draws.find((d) => d.name === 'predictFragment').viewport,
+    [0, 0, 256, 118],
+  );
   assert.ok(
     gl.draws
       .filter((d) => d.name.startsWith('sort'))
@@ -318,5 +322,5 @@ test('compute caches redundant GL submissions and restores state after scene ren
   );
   assert.ok(gl.counters.scalarWrites < 180, JSON.stringify(gl.counters));
   assert.ok(gl.counters.programBinds < 50, JSON.stringify(gl.counters));
-  assert.ok(gl.counters.viewportWrites < 12, JSON.stringify(gl.counters));
+  assert.ok(gl.counters.viewportWrites < 24, JSON.stringify(gl.counters));
 });

@@ -1,3 +1,10 @@
+import { duckCommon } from './duck-shaders.ts';
+export {
+  duckInitializeFragment,
+  duckPredictFragment,
+  duckReduceFragment,
+  duckIntegrateFragment,
+} from './duck-shaders.ts';
 import { PARTICLE_WIDTH } from './gpu-particle-config.ts';
 import {
   GPU_VOLUME_SIZE,
@@ -17,7 +24,17 @@ precision highp sampler2D;
 uniform sampler2D positions, velocities, sortedKeys, cellRanges, lambdas, oldPositions;
 uniform int count;
 uniform float particleScale;
+uniform float duckEnabled;
 const float REST=3.6;
+${duckCommon}
+vec4 duckSupport(vec3 p){
+ if(duckEnabled<.5)return vec4(0.);
+ vec4 hull=duckHull(p);float a=clamp(hull.w/(.17*particleScale),0.,1.);
+ float a2=a*a,a3=a2*a,a4=a3*a,a5=a4*a;
+ float cap=.5-1.25*a+2.5*a3-2.5*a4+.75*a5;
+ float slope=(1.25-7.5*a2+10.*a3-3.75*a4)/(.17*particleScale);
+ return vec4(hull.xyz*slope,cap*REST);
+}
 #define H (.17*particleScale)
 ivec2 uv(int i){return ivec2(i%${PARTICLE_WIDTH},i/${PARTICLE_WIDTH});}
 int id(){return int(gl_FragCoord.x)+int(gl_FragCoord.y)*${PARTICLE_WIDTH};}
@@ -154,18 +171,33 @@ export const lambdaFragment =
   `
 out vec4 result;
 void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positions,i).xyz;
- vec4 wall=wallSupport(p);float rho=wall.w,sum=0.;vec3 grad=wall.xyz;
+ vec4 wall=wallSupport(p)+duckSupport(p);float rho=wall.w,sum=0.;vec3 grad=wall.xyz;
  ${neighbors('rho+=q*q; grad+=gradient; sum+=dot(gradient,gradient);')}
  result=vec4(-max(rho/REST-1.,0.)/(sum+dot(grad,grad)+2.),rho,0.,0.);
 }`;
 export const correctFragment =
   common +
   `
-out vec4 result;
-void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positions,i).xyz;
+layout(location=0) out vec4 result;
+layout(location=1) out vec4 linearReaction;
+layout(location=2) out vec4 angularReaction;
+uniform sampler2D linearSource,angularSource;
+uniform float reactionReset;
+void main(){int i=id();linearReaction=vec4(0.);angularReaction=vec4(0.);if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positions,i).xyz;
  float lambda=readAt(lambdas,i).x;vec3 delta=-lambda*wallSupport(p).xyz;
  ${neighbors('delta-=(lambda+readAt(lambdas,j).x)*gradient;')}
- result=vec4(bound(p+limited(delta,.017*particleScale)),1.);
+ vec3 boundaryDelta=-lambda*duckSupport(p).xyz;
+ delta+=boundaryDelta;
+ float limiter=min(1.,.017*particleScale/max(length(delta),1e-8));
+ vec3 next=bound(p+delta*limiter);
+ vec4 hull=duckHull(next);vec3 contact=hull.xyz*max(0.,.004-hull.w);
+ contact=duckEnabled>.5?limited(contact,.025*particleScale):vec3(0.);next=bound(next+contact);
+ // Equal and opposite impulses; the exact same limiter is used for both sides.
+ float particleMass=(2.*3.14159265/15.)*H*H*H/REST;
+ vec3 impulse=-particleMass*(boundaryDelta*limiter+contact)*60.;
+ linearReaction=vec4(impulse,0.)+(reactionReset>.5?vec4(0.):readAt(linearSource,i));
+ angularReaction=vec4(cross(p-duckPosition(),impulse),0.)+(reactionReset>.5?vec4(0.):readAt(angularSource,i));
+ result=vec4(next,1.);
 }`;
 export const velocityFragment =
   common +
@@ -194,7 +226,7 @@ export const divergenceFactorFragment =
   `
 out vec4 result;
 void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positions,i).xyz;
- vec4 wall=wallSupport(p);float rho=wall.w,sum=0.,nearby=0.;vec3 grad=wall.xyz;
+ vec4 wall=wallSupport(p)+duckSupport(p);float rho=wall.w,sum=0.,nearby=0.;vec3 grad=wall.xyz;
  ${neighbors('rho+=q*q;grad+=gradient;sum+=dot(gradient,gradient);nearby+=1.;')}
  // Sparse ballistic spray has no reliable divergence estimate.
  float factor=nearby>=12.&&rho>REST*.4?1./max(sum+dot(grad,grad),1e-6):0.;
@@ -206,7 +238,7 @@ export const divergenceResidualFragment =
 uniform sampler2D factors;
 out vec4 result;
 void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positions,i).xyz,v=readAt(velocities,i).xyz;
- float rate=-dot(v,wallSupport(p).xyz);
+ float rate=-dot(v,wallSupport(p).xyz)-dot(v-duckVelocity(p),duckSupport(p).xyz);
  ${neighbors('rate+=dot(readAt(velocities,j).xyz-v,gradient);')}
  vec4 f=readAt(factors,i);
  result=vec4(max(rate,0.)*f.x,rate,f.y,0.);
@@ -214,12 +246,29 @@ void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positi
 export const divergenceProjectFragment =
   common +
   `
-out vec4 result;
-void main(){int i=id();if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positions,i).xyz,v=readAt(velocities,i).xyz;
+layout(location=0) out vec4 result;
+layout(location=1) out vec4 linearReaction;
+layout(location=2) out vec4 angularReaction;
+uniform sampler2D linearSource,angularSource;
+void main(){int i=id();linearReaction=vec4(0.);angularReaction=vec4(0.);if(i>=count){result=vec4(0.);return;}vec3 p=readAt(positions,i).xyz,v=readAt(velocities,i).xyz;
  float pressure=readAt(lambdas,i).x;vec3 delta=pressure*wallSupport(p).xyz;
  ${neighbors('delta+=(pressure+readAt(lambdas,j).x)*gradient;')}
  // Relaxed Jacobi, with a non-penetrating slip boundary after projection.
- v=limited(v+.5*delta,12.);
+ vec3 boundaryDelta=.5*pressure*duckSupport(p).xyz;
+ vec3 before=v+.5*delta;v=before+boundaryDelta;
+ vec4 hull=duckHull(p);
+ if(duckEnabled>.5&&hull.w<.018){
+  vec3 relative=v-duckVelocity(p);
+  vec3 normalPart=dot(relative,hull.xyz)*hull.xyz;
+  // Impermeable slip contact plus weak tangential drag; no artificial adhesion.
+  v-=min(dot(relative,hull.xyz),0.)*hull.xyz;
+  v-=(relative-normalPart)*.025*(1.-smoothstep(.004,.018,hull.w));
+ }
+ float limiter=min(1.,12./max(length(v),1e-8));
+ vec3 impulse=-(v-before)*limiter*((2.*3.14159265/15.)*H*H*H/REST);
+ linearReaction=readAt(linearSource,i)+vec4(impulse,0.);
+ angularReaction=readAt(angularSource,i)+vec4(cross(p-duckPosition(),impulse),0.);
+ v*=limiter;
  if(p.x<=-1.77999)v.x=max(v.x,0.);if(p.x>=1.77999)v.x=min(v.x,0.);
  if(p.y<=-.91699)v.y=max(v.y,0.);if(p.y>=3.79999)v.y=min(v.y,0.);
  if(p.z<=-1.27999)v.z=max(v.z,0.);if(p.z>=1.27999)v.z=min(v.z,0.);
