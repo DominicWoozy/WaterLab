@@ -24,6 +24,7 @@ export type WaterSettings = {
   reflection: boolean;
   caustics: boolean;
   particles: boolean;
+  details: boolean;
   paused: boolean;
   mode: 'stir' | 'pour' | 'orbit';
 };
@@ -37,6 +38,7 @@ export const defaults: WaterSettings = {
   reflection: true,
   caustics: true,
   particles: false,
+  details: true,
   paused: false,
   mode: 'stir',
 };

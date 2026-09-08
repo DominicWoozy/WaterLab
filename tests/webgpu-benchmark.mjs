@@ -33,7 +33,7 @@ renderer.setModel(
 const n = Number(process.argv[2] || 50000),
   w = 1250,
   h = 800,
-  frames = 80;
+  frames = process.env.DETAILS === 'alternate' ? 140 : 80;
 const image = device.createTexture({
   size: [w, h],
   format: 'rgba8unorm',
@@ -42,12 +42,38 @@ const image = device.createTexture({
 let e = device.createCommandEncoder();
 sim.reset(e, n);
 device.queue.submit([e.finish()]);
+const rough = process.env.SCENE === 'rough';
+const paired = process.env.PAIRED === '1';
 const forces = { gravity: 9.8, viscosity: 0.025, agitation: 0 };
 for (let i = 0; i < 120; i++) {
   e = device.createCommandEncoder();
-  sim.step(e, { forces });
+  sim.step(e, {
+    forces: rough ? { ...forces, agitation: 1.4 } : forces,
+    shake: rough && i < 30 ? 12 : 0,
+    splash: rough && i % 60 === 0 ? [0.5, 0.3, 2] : undefined,
+  });
   device.queue.submit([e.finish()]);
   if (i % 2 === 1) await device.queue.onSubmittedWorkDone();
+}
+const seed = device.createBuffer({
+  size: sim.state.size,
+  usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+});
+const duckSeed = device.createBuffer({
+  size: 64,
+  usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+});
+const featureCount = device.createBuffer({
+  size: 16,
+  usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+});
+const anchorTime = sim.time;
+if (paired) {
+  e = device.createCommandEncoder();
+  e.copyBufferToBuffer(sim.state, 0, seed, 0, sim.state.size);
+  e.copyBufferToBuffer(sim.duck, 0, duckSeed, 0, 64);
+  device.queue.submit([e.finish()]);
+  await device.queue.onSubmittedWorkDone();
 }
 const norm = (a) => {
   const n = Math.hypot(...a);
@@ -67,6 +93,7 @@ const eye = [
   right = norm(cross(forward, [0, 1, 0])),
   up = cross(right, forward);
 const pairs = [];
+const byMode = { on: [], off: [] };
 const phases = { physics: [], density: [], render: [] };
 const profile = process.env.PROFILE === '1';
 const split = !profile && process.env.SPLIT !== '0';
@@ -74,7 +101,20 @@ let start = performance.now();
 for (let frame = 0; frame < frames; frame++) {
   const commands = [];
   e = device.createCommandEncoder();
-  sim.step(e, { forces });
+  if (paired) {
+    e.copyBufferToBuffer(seed, 0, sim.state, 0, seed.size);
+    e.copyBufferToBuffer(duckSeed, 0, sim.duck, 0, 64);
+    sim.time = anchorTime;
+  }
+  sim.step(e, {
+    forces: rough ? { ...forces, agitation: 1.4 } : forces,
+    shake: !paired && rough && frame < 20 ? 12 : 0,
+    splash: !paired && rough && frame % 40 === 0 ? [0.5, 0.3, 2] : undefined,
+  });
+  const detailMode =
+    process.env.DETAILS === 'alternate'
+      ? Math.floor(frame / (paired ? 2 : 20)) % 2 === 0
+      : process.env.DETAILS !== '0';
   let phaseStart = performance.now();
   if (profile) {
     device.queue.submit([e.finish()]);
@@ -87,7 +127,9 @@ for (let frame = 0; frame < frames; frame++) {
     commands.push(e.finish());
     e = device.createCommandEncoder();
   }
-  volume.encode(e, sim);
+  volume.encode(e, sim, detailMode);
+  if (detailMode)
+    e.copyBufferToBuffer(volume.detailDraw, 0, featureCount, 0, 16);
   if (profile) {
     device.queue.submit([e.finish()]);
     await device.queue.onSubmittedWorkDone();
@@ -117,7 +159,10 @@ for (let frame = 0; frame < frames; frame++) {
   if (frame % 2 === 1) {
     await device.queue.onSubmittedWorkDone();
     const now = performance.now();
-    if (frame >= 20) pairs.push((now - start) / 2);
+    if (frame >= 20) {
+      pairs.push((now - start) / 2);
+      byMode[detailMode ? 'on' : 'off'].push((now - start) / 2);
+    }
     start = now;
   }
   assert.equal(lost, undefined, JSON.stringify(lost));
@@ -140,6 +185,7 @@ for (const [i, z] of [12, 48, 84].entries())
     i * 4,
     4,
   );
+e.copyBufferToBuffer(featureCount, 4, densityCheck, 12, 4);
 e.copyTextureToBuffer(
   { texture: image },
   { buffer: output, bytesPerRow: stride },
@@ -153,7 +199,8 @@ const pixels = new Uint8Array(range.slice(0));
 output.unmap();
 await densityCheck.mapAsync(GPUMapMode.READ);
 const densityRange = densityCheck.getMappedRange();
-const densities = new Float32Array(densityRange.slice(0));
+const densityCopy = densityRange.slice(0);
+const densities = new Float32Array(densityCopy);
 densityCheck.unmap();
 assert.ok(
   densities.slice(0, 3).every((v) => v > 1.15),
@@ -213,6 +260,24 @@ console.log(
       particles: n,
       resolution: [w, h],
       features,
+      scene: rough ? 'rough' : 'calm',
+      paired,
+      detailCount: new Uint32Array(densityCopy)[3],
+      detail_modes: Object.fromEntries(
+        Object.entries(byMode)
+          .filter(([, a]) => a.length)
+          .map(([k, a]) => {
+            const sorted = [...a].sort((x, y) => x - y);
+            return [
+              k,
+              {
+                mean: a.reduce((a, b) => a + b) / a.length,
+                p50: sorted[Math.floor(a.length * 0.5)],
+                p95: sorted[Math.floor(a.length * 0.95)],
+              },
+            ];
+          }),
+      ),
       completed_frame_ms: {
         mean: pairs.reduce((a, b) => a + b) / pairs.length,
         p50: sorted[Math.floor(sorted.length * 0.5)],

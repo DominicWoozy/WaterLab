@@ -37,6 +37,7 @@ export function registerWaterTools(
           gravity: { type: 'number', minimum: 0, maximum: 14 },
           agitation: { type: 'number', minimum: 0, maximum: 1.4 },
           particles: { type: 'boolean' },
+          details: { type: 'boolean' },
           light: { type: 'number', minimum: 0.2, maximum: 2.5 },
           reflection: { type: 'boolean' },
           caustics: { type: 'boolean' },
@@ -68,7 +69,13 @@ export function registerWaterTools(
             )
               throw new Error(`${key} 超出允许范围`);
           } else if (
-            ['reflection', 'caustics', 'paused', 'particles'].includes(key)
+            [
+              'reflection',
+              'caustics',
+              'paused',
+              'particles',
+              'details',
+            ].includes(key)
           ) {
             if (typeof value !== 'boolean')
               throw new Error(`${key} 必须是布尔值`);

@@ -44,6 +44,12 @@ node --test tests/fluid-simulation.test.mjs
 
 macOS / Metal 原生验证：`npm run test:webgpu`；完整帧测量：`npm run benchmark:webgpu -- 50000`。原生测试需要图形设备权限。详细结果与局限见 [WebGPU 迁移记录](docs/webgpu-migration.md)，这些数字不能当成浏览器 FPS。
 
+### 精细水滴与薄片（实验）
+
+WebGPU 的光影面板新增“精细水滴与薄片”开关，默认开启。孤立水滴直接渲染解析曲面；局部薄片使用扁平椭球和屏幕空间法线滤波，并累积重叠薄片的光学厚度。物理粒子与求解器不变，不增加全局体素分辨率。关闭可恢复原密度重建，暂停时也能切换对比。WebGL2 不启用此功能。
+
+`npm run test:webgpu:details` 检查带孔薄片、水滴、光学厚度和状态切换。算法、性能对比及单层透明细节等限制见 [实验记录](docs/hybrid-water-details.md)。
+
 ## WebGL2 回退：GPU 模拟与连续水体重建
 
 回退路径为 `app/gpu-fluid.ts` 和 `app/gpu-fluid-shaders.ts`，使用 WebGL 2 浮点帧缓冲执行 GPGPU；不再启动 CPU 物理 Worker。JS 只处理输入、粒子数量与固定步进调度、提交绘制指令，不遍历粒子求解，也不逐帧上传或读回粒子/密度数组。`fluid-simulation.ts`、`fluid-volume.ts` 和旧 Worker 保留为 CPU 参考实现与回归测试，不参与网页数值计算。

@@ -96,7 +96,7 @@ const duck = await read(sim.duck);
 assert.ok(duck.every(Number.isFinite));
 assert.ok(Math.abs(Math.hypot(...duck.slice(4, 8)) - 1) < 0.001);
 e = device.createCommandEncoder();
-volume.encode(e, sim);
+volume.encode(e, sim, false);
 console.log('density encoded');
 device.queue.submit([e.finish()]);
 await device.queue.onSubmittedWorkDone();
@@ -174,7 +174,7 @@ for (let k = 0; k < 30720; k++) {
 sim.count = 0;
 e = device.createCommandEncoder();
 sim.step(e, { forces: { gravity: 9.8, viscosity: 0.025, agitation: 0 } });
-volume.encode(e, sim);
+volume.encode(e, sim, false);
 device.queue.submit([e.finish()]);
 assert.ok((await read(volume.density)).every((v) => v === 0));
 sim.count = 18;
@@ -192,7 +192,7 @@ for (const quality of [15000, 30000, 50000]) {
   sim.reset(e, quality);
   sim.step(e, { forces: { gravity: 9.8, viscosity: 0.025, agitation: 0 } }, 0);
   sim.step(e, { forces: { gravity: 9.8, viscosity: 0.025, agitation: 0 } }, 1);
-  volume.encode(e, sim);
+  volume.encode(e, sim, false);
   device.queue.submit([e.finish()]);
   const a = await read(sim.state);
   assert.ok(a.slice(0, quality * 12).every(Number.isFinite));

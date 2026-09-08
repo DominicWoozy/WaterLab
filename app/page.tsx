@@ -365,6 +365,17 @@ export default function Home() {
                 onChange={(v) => update('light', v)}
               />
               <div className="toggle-row">
+                <label htmlFor="details">
+                  精细水滴与薄片<small>局部重建实验 · 关闭可对比原效果</small>
+                </label>
+                <Switch
+                  id="details"
+                  checked={settings.details && stats.backend === 'WebGPU'}
+                  disabled={stats.backend !== 'WebGPU'}
+                  onCheckedChange={(v) => update('details', v)}
+                />
+              </div>
+              <div className="toggle-row">
                 <label htmlFor="reflection">
                   环境反射<small>随粒子水面形变的环境倒影</small>
                 </label>

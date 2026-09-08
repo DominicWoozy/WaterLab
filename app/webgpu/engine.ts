@@ -235,9 +235,10 @@ export async function createWebGPUWater(
       // Separate stage command buffers avoid oversized Metal encoder workloads;
       // submit them together in order, with no CPU wait or particle readback.
       const commands = [encoder.finish()];
+      if (volume.detailsEnabled !== s.details) dirty = true;
       if (dirty && !s.particles) {
         encoder = device.createCommandEncoder({ label: 'WaterLab density' });
-        volume.encode(encoder, sim);
+        volume.encode(encoder, sim, s.details);
         commands.push(encoder.finish());
         dirty = false;
       }

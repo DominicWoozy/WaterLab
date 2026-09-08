@@ -14,7 +14,8 @@
     "build:pages": "vite build --config vite.pages.config.ts",
     "test:gpu": "node --test tests/gpu-fluid.test.mjs",
     "test:webgpu": "node --experimental-strip-types tests/webgpu-numeric.mjs",
-    "benchmark:webgpu": "node --experimental-strip-types tests/webgpu-benchmark.mjs"
+    "benchmark:webgpu": "node --experimental-strip-types tests/webgpu-benchmark.mjs",
+    "test:webgpu:details": "node --experimental-strip-types tests/webgpu-details.mjs"
   },
   "dependencies": {
     "react": "19.2.6",

@@ -8,10 +8,32 @@ export class WebGPUVolume {
   readonly shapes: GPUBuffer;
   readonly bounds: GPUBuffer;
   readonly density: GPUBuffer;
+  readonly details: GPUBuffer;
+  readonly detailDraw: GPUBuffer;
+  detailsEnabled = false;
+  private settings: GPUBuffer;
+  private device: GPUDevice;
   private temp: GPUBuffer;
   private filtered: GPUBuffer;
   private kernels = new Map<string, ComputeKernel>();
   private constructor(device: GPUDevice) {
+    this.device = device;
+    this.details = buffer(device, 'analytic water details', CAPACITY * 64);
+    this.detailDraw = buffer(
+      device,
+      'detail indirect draw',
+      16,
+      GPUBufferUsage.STORAGE |
+        GPUBufferUsage.INDIRECT |
+        GPUBufferUsage.COPY_DST |
+        GPUBufferUsage.COPY_SRC,
+    );
+    this.settings = buffer(
+      device,
+      'reconstruction settings',
+      16,
+      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    );
     this.shapes = buffer(
       device,
       'particle reconstruction shapes',
@@ -44,23 +66,37 @@ export class WebGPUVolume {
       throw e;
     }
   }
-  encode(encoder: GPUCommandEncoder, sim: WebGPUSimulation) {
+  encode(encoder: GPUCommandEncoder, sim: WebGPUSimulation, details = true) {
+    this.detailsEnabled = details;
+    this.device.queue.writeBuffer(
+      this.settings,
+      0,
+      new Uint32Array([+details, 0, 0, 0]),
+    );
     const p = sim.writeParameters(4, {
       forces: { gravity: 9.8, viscosity: 0.025, agitation: 0 },
     });
     // This fresh grid makes render-kernel gathering exact after pressure/contact corrections.
     sim.buildGrid(encoder, p);
     encoder.clearBuffer(this.bounds);
+    encoder.clearBuffer(this.detailDraw);
     const pass = encoder.beginComputePass({
       label: 'anisotropy-density-filter',
     });
-    this.kernels
-      .get('geometry')!
-      .dispatch(
-        pass,
-        { 0: p, 1: sim.state, 2: this.shapes, 3: sim.starts, 4: this.bounds },
-        Math.ceil(sim.count / 128),
-      );
+    this.kernels.get('geometry')!.dispatch(
+      pass,
+      {
+        0: p,
+        1: sim.state,
+        2: this.shapes,
+        3: sim.starts,
+        4: this.bounds,
+        5: this.details,
+        6: this.detailDraw,
+        7: this.settings,
+      },
+      Math.ceil(sim.count / 128),
+    );
     this.kernels.get('density')!.dispatch(
       pass,
       {
@@ -94,9 +130,16 @@ export class WebGPUVolume {
     );
   }
   destroy() {
-    [this.shapes, this.bounds, this.density, this.temp, this.filtered].forEach(
-      (b) => b.destroy(),
-    );
+    [
+      this.shapes,
+      this.bounds,
+      this.density,
+      this.temp,
+      this.filtered,
+      this.details,
+      this.detailDraw,
+      this.settings,
+    ].forEach((b) => b.destroy());
     this.texture.destroy();
     this.kernels.forEach((k) => k.clearCache());
   }

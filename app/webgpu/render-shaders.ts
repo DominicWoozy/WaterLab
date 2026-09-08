@@ -1,5 +1,8 @@
+import { detailCommon } from './detail-shaders.ts';
 export function renderShader(filterable: boolean) {
-  return /* wgsl */ `
+  return (
+    detailCommon +
+    /* wgsl */ `
 struct Scene {eye:vec4f,forward:vec4f,right:vec4f,up:vec4f,view:vec4f,light:vec4f,brush:vec4f,config:vec4f}
 struct Duck {pos:vec4f,rotation:vec4f,vel:vec4f,omega:vec4f}
 @group(0) @binding(0) var<uniform> S:Scene;
@@ -11,6 +14,10 @@ struct Duck {pos:vec4f,rotation:vec4f,vel:vec4f,omega:vec4f}
 @group(0) @binding(6) var<storage,read> triangles:array<vec4f>;
 @group(0) @binding(7) var albedo:texture_2d<f32>;
 @group(0) @binding(8) var albedoSampler:sampler;
+@group(0) @binding(9) var detailHits:texture_2d<f32>;
+@group(0) @binding(10) var detailNormals:texture_2d<f32>;
+@group(0) @binding(11) var<storage,read> details:array<Detail>;
+@group(0) @binding(12) var sheetThickness:texture_2d<f32>;
 const VMIN=vec3f(-2.08,-1.12,-1.56);const VMAX=vec3f(2.08,4.08,1.56);const VSIZE=vec3f(128.,160.,96.);
 var<private> volumeTop:f32;
 struct VertexOut {@builtin(position) position:vec4f,@location(0) uv:vec2f}
@@ -94,6 +101,22 @@ fn room(ro:vec3f,rd:vec3f)->vec3f {
  return c;
 }
 fn scene(ro:vec3f,rd:vec3f)->vec3f {let floorT=(-.97-ro.y)/rd.y;let hit=duckTrace(ro,rd,select(1e5,floorT,floorT>0.));if(hit.y>=0.){return duckShade(hit,rd);}return room(ro,rd);}
+fn waterColor(p:vec3f,n:vec3f,rd:vec3f,detailId:u32,viewThickness:f32)->vec3f {
+  let refracted=refract(rd,n,1./1.333);var exitPoint=p+refracted*.003;var exitRay=refracted;var thickness=0.;
+  if(detailId>0u){
+   let d=details[detailId-1u];let chord=detailRoots(d,p+refracted*.00001,refracted);let distance=max(0.,chord.y);
+   thickness=distance;exitPoint=p+refracted*(distance+.00002);
+   if(d.center.w<1.5){let exitNormal=normalize(detailMetric(d)*(exitPoint-d.center.xyz));let outside=refract(refracted,-exitNormal,1.333);if(dot(outside,outside)>.1){exitRay=normalize(outside);}}
+   else{exitRay=rd;thickness=viewThickness*abs(dot(n,rd))/max(abs(dot(n,refracted)),.1);}
+  }
+  thickness+=opticalPath(exitPoint,exitRay);let absorb=exp(-vec3f(1.25,.2,.065)*thickness);
+  var samplePoint=exitPoint;if(detailId==0u){samplePoint=p+refracted*.006;}
+  var transmission=scene(samplePoint,exitRay)*absorb;transmission+=vec3f(.012,.11,.13)*(1.-absorb)*S.light.x*.45;var color=transmission;
+  if(S.light.y>.5){let fresnel=.0204+.9796*pow(1.-max(dot(-rd,n),0.),5.);let reflected=reflect(rd,n);let mirrorDuck=duckTrace(p+reflected*.006,reflected,1e5);var reflection=sky(reflected);if(mirrorDuck.y>=0.){reflection=duckShade(mirrorDuck,reflected);}color=mix(transmission,reflection,fresnel);
+  let sun=normalize(vec3f(-.6,1.,.35));color+=vec3f(1.,.97,.9)*pow(max(dot(reflect(rd,n),sun),0.),240.)*S.light.x;}
+  if(S.light.z>.5){let q=p.xz*10.+n.xz*1.7;let caustic=pow(max(0.,1.-abs(sin(q.x+sin(q.y+S.view.w*.4))+sin(q.y+sin(q.x-S.view.w*.3)))*.7),15.);color+=vec3f(.12,.15,.14)*caustic*S.light.x*min(thickness,.7)*absorb;}
+ return color;
+}
 struct FragmentOut {@location(0) color:vec4f,@builtin(frag_depth) depth:f32}
 @fragment fn fragment(in:VertexOut)->FragmentOut {
  volumeTop=bitcast<f32>(bounds[0])-2.+.36;let rd=ray(in.uv);let floorT=(-.97-S.eye.y)/rd.y;
@@ -103,18 +126,31 @@ struct FragmentOut {@location(0) color:vec4f,@builtin(frag_depth) depth:f32}
  if(found){
   for(var i=0;i<7;i++){let mid=(at+last)*.5;if(density(S.eye.xyz+rd*mid)>S.config.x){at=mid;}else{last=mid;}}
   let p=S.eye.xyz+rd*at;var n=normalAt(p);if(dot(n,rd)>0.){n=-n;}
-  let refracted=refract(rd,n,1./1.333);let thickness=opticalPath(p+refracted*.003,refracted);let absorb=exp(-vec3f(1.25,.2,.065)*thickness);
-  var transmission=scene(p+refracted*.006,refracted)*absorb;transmission+=vec3f(.012,.11,.13)*(1.-absorb)*S.light.x*.45;color=transmission;
-  if(S.light.y>.5){let fresnel=.0204+.9796*pow(1.-max(dot(-rd,n),0.),5.);let reflected=reflect(rd,n);let mirrorDuck=duckTrace(p+reflected*.006,reflected,1e5);var reflection=sky(reflected);if(mirrorDuck.y>=0.){reflection=duckShade(mirrorDuck,reflected);}color=mix(transmission,reflection,fresnel);
-  let sun=normalize(vec3f(-.6,1.,.35));color+=vec3f(1.,.97,.9)*pow(max(dot(reflect(rd,n),sun),0.),240.)*S.light.x;}
-  if(S.light.z>.5){let q=p.xz*10.+n.xz*1.7;let caustic=pow(max(0.,1.-abs(sin(q.x+sin(q.y+S.view.w*.4))+sin(q.y+sin(q.x-S.view.w*.3)))*.7),15.);color+=vec3f(.12,.15,.14)*caustic*S.light.x*min(thickness,.7)*absorb;}
+  color=waterColor(p,n,rd,0u,0.);
+ }
+ if(S.eye.w>.5&&S.light.w<.5){
+  let pixel=vec2i(in.position.xy);let hit=textureLoad(detailHits,pixel,0);
+  if(hit.y>.5&&hit.x<primaryDuck.x&&(!found||hit.x<at)){
+   var n=normalize(textureLoad(detailNormals,pixel,0).xyz);
+   if(hit.w>1.5){
+    // Five local taps only on sheets. Reject depth/normal discontinuities, and
+    // never fill an empty pixel: disconnected drops and sheet holes stay separate.
+    var sum=n*2.;var weight=2.;let offsets=array<vec2i,4>(vec2i(1,0),vec2i(-1,0),vec2i(0,1),vec2i(0,-1));
+    for(var j=0;j<4;j++){let atPixel=clamp(pixel+offsets[j],vec2i(0),vec2i(S.view.xy)-1);let other=textureLoad(detailHits,atPixel,0);let nn=textureLoad(detailNormals,atPixel,0).xyz;
+     if(other.w>1.5&&abs(other.x-hit.x)<.025&&dot(n,nn)>.85){sum+=nn;weight+=1.;}}
+    n=normalize(sum/weight);
+   }
+   let p=S.eye.xyz+rd*hit.x;if(dot(n,rd)>0.){n=-n;}
+   color=mix(color,waterColor(p,n,rd,u32(hit.y),textureLoad(sheetThickness,pixel,0).r),hit.z);
+  }
  }
  if(S.brush.w>.5){let t=(S.brush.y-S.eye.y)/rd.y;if(t>0.){let p=S.eye.xyz+rd*t;let ring=exp(-pow((length(p.xz-S.brush.xz)-.48)*110.,2.));color+=vec3f(.2,.65,.5)*ring*.55;}}
  color=1.-exp(-color*1.35);let vignette=in.uv-.5;color*=1.-.12*dot(vignette,vignette);
  var depth=1.;if(primaryDuck.y>=0.){depth=clamp(1.002004-.1002004/max(.101,dot(rd*primaryDuck.x,S.forward.xyz)),0.,1.);}
  return FragmentOut(vec4f(pow(color,vec3f(.91)),1.),depth);
 }
-`;
+`
+  );
 }
 export const particlesShader = /* wgsl */ `
 struct Scene {eye:vec4f,forward:vec4f,right:vec4f,up:vec4f,view:vec4f,light:vec4f,brush:vec4f,config:vec4f}
