@@ -13,7 +13,17 @@ sources = json.loads(subprocess.check_output(['node', '--input-type=module', '-e
 if '--without-wall-support' in sys.argv:
     sources={k:re.sub(r'vec4 wallSupport\(vec3 p\)\{.*?\n\}', 'vec4 wallSupport(vec3 p){return vec4(0.);}', v, flags=re.S) for k,v in sources.items()}
 # Compile the production traversal with only its reduction changed to count/moment.
-sources['neighborProbeFragment']=sources['lambdaFragment'].replace('rho+=q*q; grad+=gradient; sum+=dot(gradient,gradient);','rho+=1.;grad+=d;').replace('vec4 wall=wallSupport(p);float rho=wall.w,sum=0.;vec3 grad=wall.xyz;','float rho=0.,sum=0.;vec3 grad=vec3(0.);').replace('result=vec4(-max(rho/REST-1.,0.)/(sum+dot(grad,grad)+2.),rho,0.,0.);','result=vec4(grad,rho);')
+probe_source=sources['lambdaFragment']
+for before,after in [
+    ('rho+=q*q; grad+=gradient; sum+=dot(gradient,gradient);','rho+=1.;grad+=d;'),
+    ('vec4 wall=wallSupport(p)+duckSupport(p);float rho=wall.w,sum=0.;vec3 grad=wall.xyz;',
+     'float rho=0.,sum=0.;vec3 grad=vec3(0.);'),
+    ('result=vec4(-max(rho/REST-1.,0.)/(sum+dot(grad,grad)+2.),rho,0.,0.);','result=vec4(grad,rho);'),
+]:
+    assert probe_source.count(before)==1, 'Production shader changed: update the neighbor-only test probe'
+    probe_source=probe_source.replace(before,after)
+sources['neighborProbeFragment']=probe_source
+
 G = c.CDLL('/System/Library/Frameworks/OpenGL.framework/OpenGL')
 def api(name, result, *args):
     f = getattr(G, name); f.restype = result; f.argtypes = args; return f
@@ -48,8 +58,8 @@ def compile_program(v,f):
         log=c.create_string_buffer(10000);G.glGetProgramInfoLog(program,10000,None,log);raise AssertionError(log.value.decode())
     return program
 programs={}
-for name in ['surfaceFilter','divergenceFactor','divergenceResidual','divergenceProject','neighborProbe','reorder','geometry','bounds','initialize','predict','key','sort','sortMerge','ranges','lambda','correct','velocity','viscosity','volume']:
-    programs[name]=compile_program(sources['volumeVertex' if name=='volume' else 'computeVertex'],sources[name+'Fragment'])
+for name in ['radixRank','radixHistogram','radixScan','radixScatter','surfaceFilter','divergenceFactor','divergenceResidual','divergenceProject','neighborProbe','reorder','geometry','bounds','initialize','predict','key','sort','sortMerge','ranges','lambda','correct','velocity','viscosity','volume']:
+    programs[name]=compile_program(sources['volumeVertex' if name=='volume' else 'radixScatterVertex' if name=='radixScatter' else 'computeVertex'],sources[name+'Fragment'])
 compile_program(sources['fullscreenVertex'],sources['surfaceFragment'])
 compile_program(sources['particleVertex'],sources['particleFragment'])
 print('PASS: all compute, volume, surface and debug shaders compile/link',flush=True)
@@ -68,6 +78,7 @@ count=quality
 scale=(10000/quality)**(1/3)
 sort_count=16384 if count<=16384 else 32768
 T={name:target() for name in ['pos','pred','corr','vel','veltmp','keys','keytmp','lambda','geometry','metric0','metric1','metric2','sortpos','sortold','sortvel','factor']}
+T['radixRanks']=target();T['radixHistogram']=target(256,16);T['radixTemp']=target(256,16)
 T['ranges']=target(256,120);T['atlas']=target(1024,1920,True)
 T['surfaceTemp']=target(1024,1920,True);T['surfaceFiltered']=target(1024,1920,True)
 G.glBindFramebuffer(0x8D40,T['geometry'][1])
@@ -80,7 +91,8 @@ def run(name,out,inputs={},values={}):
     G.glUniform1i(G.glGetUniformLocation(p,b'initialCount'),quality)
     G.glUniform1i(G.glGetUniformLocation(p,b'sortCount'),sort_count)
     G.glUniform1f(G.glGetUniformLocation(p,b'particleScale'),scale)
-    if name in ['key','sort','sortMerge']:G.glViewport(0,0,256,sort_count//256)
+    if name in ['key','sort','sortMerge','radixRank','radixScatter']:G.glViewport(0,0,256,sort_count//256)
+    elif name in ['radixHistogram','radixScan']:G.glViewport(0,0,256,sort_count//2048)
     elif name in ['predict','lambda','correct','velocity','viscosity','geometry','reorder','divergenceFactor','divergenceResidual','divergenceProject']:G.glViewport(0,0,256,max(1,math.ceil(count/256)))
     for unit,(uniform,tex) in enumerate(inputs.items()):
         assert T[tex]!=t
@@ -88,10 +100,11 @@ def run(name,out,inputs={},values={}):
     for name2,value in values.items():
         loc=G.glGetUniformLocation(p,name2.encode())
         if isinstance(value,(list,tuple)):getattr(G,'glUniform%dfv'%len(value))(loc,1,(F*len(value))(*value))
-        elif name2 in ['stage','stride','previousCount']:G.glUniform1i(loc,int(value))
+        elif name2 in ['stage','stride','previousCount','digitShift','scanStride']:G.glUniform1i(loc,int(value))
         else:G.glUniform1f(loc,value)
     if name=='volume':
         G.glClearColor(0,0,0,0);G.glClear(0x4000);G.glEnable(0x0BE2);G.glBlendFunc(1,1);G.glDrawArraysInstanced(4,0,6,count*20);G.glDisable(0x0BE2)
+    elif name=='radixScatter':G.glDrawArrays(0,0,sort_count)
     else:G.glDrawArrays(4,0,3)
     error=G.glGetError();assert error==0,(name,hex(error))
 def filter_surface():
@@ -102,7 +115,7 @@ def filter_surface():
 def read(name):
     t=T[name];G.glBindFramebuffer(0x8D40,t[1]);a=(F*(t[2]*t[3]*4))();G.glReadPixels(0,0,t[2],t[3],0x1908,0x1406,a);assert G.glGetError()==0;return a
 
-def grid(p):
+def bitonic_grid(p):
     global sort_count
     sort_count=16384 if count<=16384 else 32768
     run('key','keys',{'positions':p})
@@ -112,6 +125,20 @@ def grid(p):
         while stride:
             run('sortMerge' if stride==4 else 'sort','keytmp',{'sortedKeys':'keys'},{'stage':stage,'stride':stride});T['keys'],T['keytmp']=T['keytmp'],T['keys'];stride=0 if stride==4 else stride//2
         stage*=2
+    run('ranges','ranges',{'sortedKeys':'keys'})
+
+def grid(p):
+    global sort_count
+    sort_count=16384 if count<=16384 else 32768
+    run('key','keys',{'positions':p})
+    for digit in [0,4,8,12]:
+        run('radixRank','radixRanks',{'sortedKeys':'keys'},{'digitShift':digit})
+        run('radixHistogram','radixHistogram',{'sortedKeys':'keys'},{'digitShift':digit})
+        for stride in [1,16,256]:
+            run('radixScan','radixTemp',{'radixHistogram':'radixHistogram'},{'scanStride':stride})
+            T['radixHistogram'],T['radixTemp']=T['radixTemp'],T['radixHistogram']
+        run('radixScatter','keytmp',{'radixRanks':'radixRanks','radixHistogram':'radixHistogram'})
+        T['keys'],T['keytmp']=T['keytmp'],T['keys']
     run('ranges','ranges',{'sortedKeys':'keys'})
 
 def reorder(predicted,previous):

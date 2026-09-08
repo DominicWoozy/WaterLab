@@ -47,6 +47,9 @@ export class GpuFluid {
   private keys: Target;
   private keysTemp: Target;
   private ranges: Target;
+  private radixRanks: Target;
+  private radixHistogram: Target;
+  private radixTemp: Target;
   private lambda: Target;
   private divergenceFactor: Target;
   private atlas: Target;
@@ -101,6 +104,9 @@ export class GpuFluid {
       this.velocityTemp = this.target();
       this.keys = this.target();
       this.keysTemp = this.target();
+      this.radixRanks = this.target();
+      this.radixHistogram = this.target(PARTICLE_WIDTH, 16);
+      this.radixTemp = this.target(PARTICLE_WIDTH, 16);
       this.ranges = this.target(PARTICLE_WIDTH, 120);
       this.lambda = this.target();
       this.divergenceFactor = this.target();
@@ -137,8 +143,10 @@ export class GpuFluid {
         'initialize',
         'predict',
         'key',
-        'sort',
-        'sortMerge',
+        'radixRank',
+        'radixHistogram',
+        'radixScan',
+        'radixScatter',
         'ranges',
         'lambda',
         'correct',
@@ -154,7 +162,11 @@ export class GpuFluid {
         this.programs.set(
           name,
           this.compile(
-            name === 'volume' ? shaders.volumeVertex : shaders.computeVertex,
+            name === 'volume'
+              ? shaders.volumeVertex
+              : name === 'radixScatter'
+                ? shaders.radixScatterVertex
+                : shaders.computeVertex,
             sources[name + 'Fragment'],
           ),
         );
@@ -278,12 +290,15 @@ export class GpuFluid {
       'geometry',
       'reorder',
     ].includes(name);
-    const sortPass = name === 'key' || name === 'sort' || name === 'sortMerge';
+    const sortPass = ['key', 'radixRank', 'radixScatter'].includes(name);
+    const histogramPass = name === 'radixHistogram' || name === 'radixScan';
     const height = particlePass
       ? Math.max(1, Math.ceil(this.count / PARTICLE_WIDTH))
       : sortPass
         ? this.sortCount / PARTICLE_WIDTH
-        : target.height;
+        : histogramPass
+          ? this.sortCount / (8 * PARTICLE_WIDTH)
+          : target.height;
     if (target.width !== this.viewportWidth || height !== this.viewportHeight) {
       gl.viewport(0, 0, target.width, height);
       this.viewportWidth = target.width;
@@ -330,7 +345,11 @@ export class GpuFluid {
         if (value.length === 3) gl.uniform3fv(location, value);
         if (value.length === 4) gl.uniform4fv(location, value);
       } else
-        scalar(key, value, ['stage', 'stride', 'previousCount'].includes(key));
+        scalar(
+          key,
+          value,
+          ['digitShift', 'scanStride', 'previousCount'].includes(key),
+        );
     }
     if (name === 'volume') {
       gl.clearColor(0, 0, 0, 0);
@@ -345,6 +364,8 @@ export class GpuFluid {
         this.count * GPU_SLICES_PER_PARTICLE,
       );
       gl.disable(gl.BLEND);
+    } else if (name === 'radixScatter') {
+      gl.drawArrays(gl.POINTS, 0, this.sortCount);
     } else gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
   private reset() {
@@ -402,18 +423,39 @@ export class GpuFluid {
   private buildGrid(p: Target) {
     this.sortCount = this.count > 16384 ? 32768 : 16384;
     this.run('key', this.keys, { positions: p });
-    // Bitonic sorting is bounded by texture capacity, independent of occupied-cell density.
-    for (let stage = 2; stage <= this.sortCount; stage *= 2)
-      for (let stride = stage / 2; stride >= 1; stride /= 2) {
+    // Four stable 4-bit digits cover every grid key, including padding. No
+    // bucket capacity limit, CPU readback, float blending, or atomic extension.
+    for (let digitShift = 0; digitShift < 16; digitShift += 4) {
+      this.run(
+        'radixRank',
+        this.radixRanks,
+        { sortedKeys: this.keys },
+        { digitShift },
+      );
+      this.run(
+        'radixHistogram',
+        this.radixHistogram,
+        { sortedKeys: this.keys },
+        { digitShift },
+      );
+      for (const scanStride of [1, 16, 256]) {
         this.run(
-          stride === 4 ? 'sortMerge' : 'sort',
-          this.keysTemp,
-          { sortedKeys: this.keys },
-          { stage, stride },
+          'radixScan',
+          this.radixTemp,
+          { radixHistogram: this.radixHistogram },
+          { scanStride },
         );
-        [this.keys, this.keysTemp] = [this.keysTemp, this.keys];
-        if (stride === 4) break;
+        [this.radixHistogram, this.radixTemp] = [
+          this.radixTemp,
+          this.radixHistogram,
+        ];
       }
+      this.run('radixScatter', this.keysTemp, {
+        radixRanks: this.radixRanks,
+        radixHistogram: this.radixHistogram,
+      });
+      [this.keys, this.keysTemp] = [this.keysTemp, this.keys];
+    }
     this.run('ranges', this.ranges, { sortedKeys: this.keys });
   }
   private reorderState(predicted: boolean, previousCount: number) {

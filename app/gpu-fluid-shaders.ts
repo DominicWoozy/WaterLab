@@ -1,3 +1,4 @@
+export * from './gpu-radix-shaders.ts';
 import { duckCommon } from './duck-shaders.ts';
 export {
   duckInitializeFragment,

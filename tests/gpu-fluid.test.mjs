@@ -81,15 +81,23 @@ function recordingGL(floatSupport = true) {
       loc.p.values[loc.name] = value;
       if (name === 'uniform1i' || name === 'uniform1f') counters.scalarWrites++;
     };
-  const record = (instances) => {
+  const record = (instances, mode, vertexCount) => {
     const name = Object.entries(shaders).find(
       ([key, source]) =>
         key.endsWith('Fragment') && source === current.sources[1],
     )?.[0];
-    draws.push({ name, instances, values: { ...current.values }, viewport });
+    draws.push({
+      name,
+      instances,
+      mode,
+      vertexCount,
+      values: { ...current.values },
+      viewport,
+    });
   };
-  gl.drawArrays = () => record(1);
-  gl.drawArraysInstanced = (_a, _b, _c, instances) => record(instances);
+  gl.drawArrays = (mode, _first, vertexCount) => record(1, mode, vertexCount);
+  gl.drawArraysInstanced = (mode, _first, vertexCount, instances) =>
+    record(instances, mode, vertexCount);
   // Deliberately provide no CPU readback, CPU position upload, or Worker methods.
   for (const name of [
     'TEXTURE_2D',
@@ -116,6 +124,7 @@ function recordingGL(floatSupport = true) {
     'FUNC_ADD',
     'ONE',
     'TRIANGLES',
+    'POINTS',
   ])
     gl[name] = serial++;
   return gl;
@@ -136,11 +145,17 @@ test('GPU update dispatches full physics, volume and bounds without state readba
   gl.draws.length = 0;
   fluid.update(job());
   assert.equal(fluid.count, 15000);
-  assert.equal(
-    gl.draws.filter((d) =>
-      ['sortFragment', 'sortMergeFragment'].includes(d.name),
-    ).length,
-    81,
+  assert.equal(gl.draws.filter((d) => d.name.startsWith('radix')).length, 24);
+  const scatters = gl.draws.filter((d) => d.name === 'radixScatterFragment');
+  assert.equal(scatters.length, 4);
+  assert.ok(
+    scatters.every((d) => d.mode === gl.POINTS && d.vertexCount === 16384),
+  );
+  assert.deepEqual(
+    gl.draws
+      .filter((d) => d.name === 'radixRankFragment')
+      .map((d) => d.values.digitShift),
+    [0, 4, 8, 12],
   );
   assert.equal(gl.draws.filter((d) => d.name === 'correctFragment').length, 3);
   assert.equal(gl.draws.filter((d) => d.name === 'boundsFragment').length, 8);
@@ -225,11 +240,16 @@ test('30,000 quality uses full sort range; switching back resets scale and resto
     job({ actions: [{ type: 'quality', count: 30000 }], paused: true }),
   );
   assert.equal(fluid.count, 30000);
-  assert.equal(
-    gl.draws.filter((d) =>
-      ['sortFragment', 'sortMergeFragment'].includes(d.name),
-    ).length,
-    94,
+  assert.equal(gl.draws.filter((d) => d.name.startsWith('radix')).length, 24);
+  assert.ok(
+    gl.draws
+      .filter((d) => d.name === 'radixScatterFragment')
+      .every((d) => d.mode === gl.POINTS && d.vertexCount === 32768),
+  );
+  assert.ok(
+    gl.draws
+      .filter((d) => d.name === 'radixScanFragment')
+      .every((d) => d.viewport[3] === 16),
   );
   const shape = gl.draws.find((d) => d.name === 'geometryFragment');
   assert.ok(shape);
@@ -239,12 +259,7 @@ test('30,000 quality uses full sort range; switching back resets scale and resto
     job({ actions: [{ type: 'quality', count: 15000 }], paused: true }),
   );
   assert.equal(fluid.count, 15000);
-  assert.equal(
-    gl.draws.filter((d) =>
-      ['sortFragment', 'sortMergeFragment'].includes(d.name),
-    ).length,
-    81,
-  );
+  assert.equal(gl.draws.filter((d) => d.name.startsWith('radix')).length, 24);
 });
 
 test('spatial reorder survives odd iterations, pause/drain, and quality changes without state aliasing', () => {
@@ -317,10 +332,12 @@ test('compute caches redundant GL submissions and restores state after scene ren
   );
   assert.ok(
     gl.draws
-      .filter((d) => d.name.startsWith('sort'))
+      .filter((d) =>
+        ['radixRankFragment', 'radixScatterFragment'].includes(d.name),
+      )
       .every((d) => d.viewport[3] === 128),
   );
   assert.ok(gl.counters.scalarWrites < 180, JSON.stringify(gl.counters));
   assert.ok(gl.counters.programBinds < 50, JSON.stringify(gl.counters));
-  assert.ok(gl.counters.viewportWrites < 24, JSON.stringify(gl.counters));
+  assert.ok(gl.counters.viewportWrites < 40, JSON.stringify(gl.counters));
 });
