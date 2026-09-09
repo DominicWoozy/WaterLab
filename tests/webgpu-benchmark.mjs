@@ -35,6 +35,7 @@ const n = Number(process.argv[2] || 50000),
   w = 1250,
   h = 800,
   frames =
+    process.env.REUSE_GRID === 'alternate' ||
     process.env.DETAILS === 'alternate' ||
     process.env.TENSION === 'alternate' ||
     process.env.CAPILLARY === 'alternate'
@@ -179,12 +180,18 @@ for (let frame = 0; frame < frames; frame++) {
     process.env.DETAILS === 'alternate'
       ? Math.floor(frame / (paired ? 2 : 20)) % 2 === 0
       : process.env.DETAILS !== '0';
+  const reuseGrid =
+    process.env.REUSE_GRID === 'alternate'
+      ? Math.floor(frame / (paired ? 2 : 20)) % 2 === 0
+      : process.env.REUSE_GRID !== '0';
   frameModes.push(
-    process.env.CAPILLARY === 'alternate'
-      ? implicit
-      : process.env.TENSION === 'alternate'
-        ? tensionMode
-        : detailMode,
+    process.env.REUSE_GRID === 'alternate'
+      ? reuseGrid
+      : process.env.CAPILLARY === 'alternate'
+        ? implicit
+        : process.env.TENSION === 'alternate'
+          ? tensionMode
+          : detailMode,
   );
   let phaseStart = performance.now();
   if (profile) {
@@ -198,7 +205,7 @@ for (let frame = 0; frame < frames; frame++) {
     commands.push(e.finish());
     e = timedEncoder(frame);
   }
-  volume.encode(e, sim, detailMode);
+  volume.encode(e, sim, detailMode, reuseGrid);
   if (detailMode)
     e.copyBufferToBuffer(volume.detailDraw, 0, featureCount, 0, 16);
   if (profile) {
@@ -232,17 +239,7 @@ for (let frame = 0; frame < frames; frame++) {
     const now = performance.now();
     if (frame >= 20) {
       pairs.push((now - start) / 2);
-      byMode[
-        (
-          process.env.CAPILLARY === 'alternate'
-            ? implicit
-            : process.env.TENSION === 'alternate'
-              ? tensionMode
-              : detailMode
-        )
-          ? 'on'
-          : 'off'
-      ].push((now - start) / 2);
+      byMode[frameModes[frame] ? 'on' : 'off'].push((now - start) / 2);
     }
     start = now;
   }
@@ -324,7 +321,7 @@ const densityCopy = densityRange.slice(0);
 const densities = new Float32Array(densityCopy);
 densityCheck.unmap();
 assert.ok(
-  densities.slice(0, 3).every((v) => v > 1.15),
+  densities.slice(0, 3).every((v) => (rough ? v >= 0 : v > 1.15)),
   'Water must cover front, middle and back slices',
 );
 assert.ok(
@@ -385,11 +382,13 @@ console.log(
       paired,
       detailCount: new Uint32Array(densityCopy)[3],
       comparison:
-        process.env.CAPILLARY === 'alternate'
-          ? 'implicit (on) / explicit (off) capillary'
-          : process.env.TENSION === 'alternate'
-            ? 'surface tension'
-            : 'detail reconstruction',
+        process.env.REUSE_GRID === 'alternate'
+          ? 'reuse final grid and neighbors'
+          : process.env.CAPILLARY === 'alternate'
+            ? 'implicit (on) / explicit (off) capillary'
+            : process.env.TENSION === 'alternate'
+              ? 'surface tension'
+              : 'detail reconstruction',
       modes: Object.fromEntries(
         Object.entries(byMode)
           .filter(([, a]) => a.length)

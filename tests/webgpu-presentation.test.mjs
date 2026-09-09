@@ -93,13 +93,15 @@ async function harness(backend = 'webgpu') {
       this.time = 0;
     },
     step() {
+      trace.push('physics');
       this.time += 1 / 60;
     },
     destroy() {},
   };
   const volume = {
     detailsEnabled: false,
-    encode(_e, _s, details) {
+    encode(_e, _s, details, reuse) {
+      trace.push(reuse ? 'density-reuse' : 'density-rebuild');
       this.detailsEnabled = details;
     },
     destroy() {},
@@ -285,3 +287,51 @@ for (const dt of [16, 100])
     assert.deepEqual(h.errors, []);
     h.engine.destroy();
   });
+
+test('reconstruction reuses neighbors only after a completed physical tick', async () => {
+  const h = await harness();
+  h.settings.paused = true;
+  assert.ok(
+    (await h.frame(16)).includes('density-rebuild'),
+    'paused initial reset',
+  );
+  h.settings.paused = false;
+  const active = await h.frame(36);
+  assert.ok(active.indexOf('physics') < active.indexOf('density-reuse'));
+  assert.ok(active.includes('density-reuse'));
+  h.settings.paused = true;
+  h.engine.drain();
+  assert.ok(
+    (await h.frame(52)).includes('density-rebuild'),
+    'drain invalidates particle ranges',
+  );
+  h.engine.reset();
+  assert.ok(
+    (await h.frame(68)).includes('density-rebuild'),
+    'reset invalidates neighbor lists',
+  );
+  h.settings.details = false;
+  assert.ok(
+    (await h.frame(84)).includes('density-rebuild'),
+    'paused detail toggle stays conservative',
+  );
+  h.settings.paused = false;
+  h.settings.particles = true;
+  assert.ok(!(await h.frame(104)).includes('density-reuse'));
+  h.settings.paused = true;
+  h.settings.particles = false;
+  assert.ok(
+    (await h.frame(120)).includes('density-rebuild'),
+    'leaving debug while paused',
+  );
+  h.settings.paused = false;
+  h.settings.speed = 2;
+  const doubleTick = await h.frame(140);
+  assert.equal(doubleTick.filter((x) => x === 'physics').length, 2);
+  assert.ok(
+    doubleTick.includes('density-reuse'),
+    'two ticks use the final tick cache',
+  );
+  assert.deepEqual(h.errors, []);
+  h.engine.destroy();
+});

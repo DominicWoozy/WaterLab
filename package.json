@@ -20,6 +20,7 @@
     "test:webgpu:surface": "node --experimental-strip-types tests/webgpu-surface.mjs",
     "test:webgpu:settling": "node --experimental-strip-types tests/webgpu-settling.mjs",
     "test:webgpu:neighbors": "node --experimental-strip-types tests/webgpu-neighbors.mjs",
+    "test:webgpu:volume-reuse": "node --experimental-strip-types tests/webgpu-volume-reuse.mjs",
     "test:webgpu:caustics": "node --experimental-strip-types tests/webgpu-caustics.mjs",
     "test:webgpu:caustic-map": "node --experimental-strip-types tests/webgpu-caustic-map.mjs"
   },

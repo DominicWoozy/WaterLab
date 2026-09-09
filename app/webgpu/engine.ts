@@ -189,6 +189,7 @@ export async function createWebGPUWater(
         splash = [0, 0, 0];
         dirty = true;
       }
+      let stepped = false;
       const budget = elapsed > 1 / 45 ? 1 : 2;
       accumulator = s.paused
         ? 0
@@ -238,6 +239,7 @@ export async function createWebGPUWater(
           },
           step,
         );
+        stepped = true;
         splash = [0, 0, 0];
         accumulator -= 1 / 60;
         dirty = true;
@@ -248,7 +250,7 @@ export async function createWebGPUWater(
       if (volume.detailsEnabled !== s.details) dirty = true;
       if (dirty && !s.particles) {
         encoder = device.createCommandEncoder({ label: 'WaterLab density' });
-        volume.encode(encoder, sim, s.details);
+        volume.encode(encoder, sim, s.details, stepped);
         commands.push(encoder.finish());
         dirty = false;
       }

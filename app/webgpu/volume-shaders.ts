@@ -1,4 +1,4 @@
-import { common, neighbors } from './common.ts';
+import { common, neighbors, cachedNeighbors } from './common.ts';
 import { detailCommon } from './detail-shaders.ts';
 export const shapeCommon = /* wgsl */ `
 struct Shape {center:vec4f,m0:vec4f,m1:vec4f,m2:vec4f}
@@ -9,6 +9,8 @@ fn determinant3(a:mat3x3f)->f32{return dot(a[0],cross(a[1],a[2]));}
 fn inverse3(a:mat3x3f)->mat3x3f{return transpose(mat3x3f(cross(a[1],a[2]),cross(a[2],a[0]),cross(a[0],a[1])))*(1./determinant3(a));}
 fn voxelIndex(p:vec3u)->u32{return p.x+128u*(p.y+160u*p.z);}
 `;
+const geometryNeighbor =
+  'let w=q*q*q;total+=w;mean-=diff*w;cov+=mat3x3f(diff*diff.x,diff*diff.y,diff*diff.z)*w;rho+=q*q;nearby+=1.;';
 export const volumeShaders: Record<string, string> = {
   geometry:
     common +
@@ -25,7 +27,7 @@ export const volumeShaders: Record<string, string> = {
  @compute @workgroup_size(128) fn main(@builtin(global_invocation_id) gid:vec3u){
  let i=gid.x;if(i>=P.counts.x){return;}let p=input[i].pos.xyz;
  var total=1.;var rho=0.;var nearby=0.;var mean=vec3f(0.);var cov=IDENTITY*0.;
- ${neighbors('let w=q*q*q;total+=w;mean-=diff*w;cov+=mat3x3f(diff*diff.x,diff*diff.y,diff*diff.z)*w;rho+=q*q;nearby+=1.;')}
+ ${neighbors(geometryNeighbor)}
  mean/=total;cov=cov*(1./total)-mat3x3f(mean*mean.x,mean*mean.y,mean*mean.z);
  let tr=max(cov[0][0]+cov[1][1]+cov[2][2],1e-8);
  // Small isolated primary droplets retain an analytic sub-voxel silhouette.
@@ -106,3 +108,11 @@ for (let axis = 0; axis < 3; axis++) {
  let blend=smoothstep(1.85,4.,peak)*.85*(1.-.95*nw);output[index]=mix(centre,sum/16.,blend);
  }`;
 }
+
+// Velocity projection does not move or reorder particles. Its final exact
+// neighbor cache is also valid for the identical geometry kernel radius.
+// Overflow still uses complete grid traversal, never a truncated list.
+volumeShaders.geometryCached = volumeShaders.geometry.replace(
+  neighbors(geometryNeighbor),
+  cachedNeighbors(geometryNeighbor),
+);

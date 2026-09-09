@@ -66,7 +66,12 @@ export class WebGPUVolume {
       throw e;
     }
   }
-  encode(encoder: GPUCommandEncoder, sim: WebGPUSimulation, details = true) {
+  encode(
+    encoder: GPUCommandEncoder,
+    sim: WebGPUSimulation,
+    details = true,
+    reuseVelocityNeighbors = false,
+  ) {
     this.detailsEnabled = details;
     this.device.queue.writeBuffer(
       this.settings,
@@ -76,27 +81,30 @@ export class WebGPUVolume {
     const p = sim.writeParameters(RENDER_PARAMETER_SLOT, {
       forces: { gravity: sim.gravity, viscosity: 0.025, agitation: 0 },
     });
-    // This fresh grid makes render-kernel gathering exact after pressure/contact corrections.
-    sim.buildGrid(encoder, p);
+    // Only a caller that just completed sim.step may reuse its exact final grid
+    // and neighbor list. Reset/drain-only frames and standalone callers rebuild.
+    if (!reuseVelocityNeighbors) sim.buildGrid(encoder, p);
     encoder.clearBuffer(this.bounds);
     encoder.clearBuffer(this.detailDraw);
     const pass = encoder.beginComputePass({
       label: 'anisotropy-density-filter',
     });
-    this.kernels.get('geometry')!.dispatch(
-      pass,
-      {
-        0: p,
-        1: sim.state,
-        2: this.shapes,
-        3: sim.starts,
-        4: this.bounds,
-        5: this.details,
-        6: this.detailDraw,
-        7: this.settings,
-      },
-      Math.ceil(sim.count / 128),
-    );
+    this.kernels
+      .get(reuseVelocityNeighbors ? 'geometryCached' : 'geometry')!
+      .dispatch(
+        pass,
+        {
+          0: p,
+          1: sim.state,
+          2: this.shapes,
+          3: sim.starts,
+          4: this.bounds,
+          5: this.details,
+          6: this.detailDraw,
+          7: this.settings,
+        },
+        Math.ceil(sim.count / 128),
+      );
     this.kernels.get('density')!.dispatch(
       pass,
       {
