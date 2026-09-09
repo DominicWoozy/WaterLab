@@ -25,6 +25,7 @@ export type WaterSettings = {
   caustics: boolean;
   particles: boolean;
   details: boolean;
+  surfaceTension: boolean;
   paused: boolean;
   mode: 'stir' | 'pour' | 'orbit';
 };
@@ -39,6 +40,7 @@ export const defaults: WaterSettings = {
   caustics: true,
   particles: false,
   details: true,
+  surfaceTension: true,
   paused: false,
   mode: 'stir',
 };
@@ -133,6 +135,7 @@ export function createWebGLWater(
     disposed = false,
     lostContext = false,
     renderScale = 1;
+  let resizePending = true;
   const normalize = (v: number[]) => {
     const length = Math.hypot(...v);
     return v.map((n) => n / length);
@@ -168,17 +171,14 @@ export function createWebGLWater(
         1.25,
         (1250 * renderScale) / Math.max(1, rect.width),
       );
-    canvas.width = Math.max(1, Math.round(rect.width * scale));
-    canvas.height = Math.max(1, Math.round(rect.height * scale));
+    const width = Math.max(1, Math.round(rect.width * scale));
+    const height = Math.max(1, Math.round(rect.height * scale));
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
     gl.viewport(0, 0, canvas.width, canvas.height);
   };
-  resize();
   const observer = new ResizeObserver(() => {
-    try {
-      resize();
-    } catch (e) {
-      onError(e instanceof Error ? e.message : '水体画布调整失败');
-    }
+    resizePending = true;
   });
   observer.observe(canvas);
   let pointer: {
@@ -211,6 +211,10 @@ export function createWebGLWater(
   };
   const render = (now: number) => {
     if (disposed || lostContext) return;
+    if (resizePending) {
+      resize();
+      resizePending = false;
+    }
     const s = getSettings();
     const b = pointer && !pointer.orbit ? pointer : null;
     try {
@@ -318,7 +322,7 @@ export function createWebGLWater(
             : renderScale;
       if (Math.abs(nextScale - renderScale) > 0.015) {
         renderScale = nextScale;
-        resize();
+        resizePending = true;
       }
       frames = 0;
       statTime = now;

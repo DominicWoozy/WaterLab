@@ -33,6 +33,7 @@ jobs:
         run: |
           npx tsc --noEmit
           npm run test:gpu
+          npm run test:presentation
       - name: Configure Pages
         id: pages
         uses: actions/configure-pages@v5

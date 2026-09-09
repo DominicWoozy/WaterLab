@@ -1,6 +1,6 @@
 import { buffer } from './compute.ts';
 import { renderShader, particlesShader } from './render-shaders.ts';
-import { detailShader, detailThicknessShader } from './detail-shaders.ts';
+import { detailShader } from './detail-shaders.ts';
 import type { WebGPUSimulation } from './simulation.ts';
 import type { WebGPUVolume } from './volume.ts';
 export type Camera = {
@@ -14,10 +14,6 @@ export class WebGPURenderer {
   private surface!: GPURenderPipeline;
   private particles!: GPURenderPipeline;
   private detailPipeline!: GPURenderPipeline;
-  private thicknessPipeline!: GPURenderPipeline;
-  private thicknessLayout: GPUBindGroupLayout;
-  private thicknessGroup: GPUBindGroup | null = null;
-  private sheetThickness: GPUTexture | null = null;
   private detailLayout: GPUBindGroupLayout;
   private detailGroup: GPUBindGroup | null = null;
   private detailHits: GPUTexture | null = null;
@@ -101,11 +97,6 @@ export class WebGPURenderer {
           texture: { sampleType: 'unfilterable-float' as const },
         })),
         { binding: 11, visibility: F, buffer: { type: 'read-only-storage' } },
-        {
-          binding: 12,
-          visibility: F,
-          texture: { sampleType: 'unfilterable-float' },
-        },
       ],
     });
     this.particleLayout = device.createBindGroupLayout({
@@ -124,21 +115,6 @@ export class WebGPURenderer {
         },
       ],
     });
-    this.thicknessLayout = device.createBindGroupLayout({
-      entries: [
-        { binding: 0, visibility: V | F, buffer: { type: 'uniform' } },
-        {
-          binding: 1,
-          visibility: V | F,
-          buffer: { type: 'read-only-storage' },
-        },
-        ...[2, 3].map((binding) => ({
-          binding,
-          visibility: F,
-          texture: { sampleType: 'unfilterable-float' as const },
-        })),
-      ],
-    });
   }
   readonly device: GPUDevice;
   readonly format: GPUTextureFormat;
@@ -154,12 +130,6 @@ export class WebGPURenderer {
         ],
         ['particles', particlesShader, r.particleLayout, 'less'],
         ['detailPipeline', detailShader, r.detailLayout, 'less'],
-        [
-          'thicknessPipeline',
-          detailThicknessShader,
-          r.thicknessLayout,
-          'always',
-        ],
       ] as const) {
         const shaderModule = device.createShaderModule({ label: name, code });
         const info = await shaderModule.getCompilationInfo();
@@ -178,35 +148,14 @@ export class WebGPURenderer {
             targets:
               name === 'detailPipeline'
                 ? [{ format: 'rgba32float' }, { format: 'rgba16float' }]
-                : name === 'thicknessPipeline'
-                  ? [
-                      {
-                        format: 'r16float',
-                        blend: {
-                          color: {
-                            srcFactor: 'one',
-                            dstFactor: 'one',
-                            operation: 'add',
-                          },
-                          alpha: {
-                            srcFactor: 'one',
-                            dstFactor: 'one',
-                            operation: 'add',
-                          },
-                        },
-                      },
-                    ]
-                  : [{ format }],
+                : [{ format }],
           },
           primitive: { topology: 'triangle-list' },
-          depthStencil:
-            name === 'thicknessPipeline'
-              ? undefined
-              : {
-                  format: 'depth32float',
-                  depthWriteEnabled: true,
-                  depthCompare: compare,
-                },
+          depthStencil: {
+            format: 'depth32float',
+            depthWriteEnabled: true,
+            depthCompare: compare,
+          },
         });
       }
       return r;
@@ -299,16 +248,6 @@ export class WebGPURenderer {
       this.detailHits?.destroy();
       this.detailNormals?.destroy();
       this.detailDepth?.destroy();
-      this.sheetThickness?.destroy();
-      this.sheetThickness = this.device.createTexture({
-        size: [width, height],
-        format: 'r16float',
-        usage:
-          GPUTextureUsage.RENDER_ATTACHMENT |
-          GPUTextureUsage.TEXTURE_BINDING |
-          GPUTextureUsage.COPY_SRC,
-      });
-      this.thicknessGroup = null;
       this.detailHits = this.device.createTexture({
         label: 'detail hit and coverage',
         size: [width, height],
@@ -361,7 +300,7 @@ export class WebGPURenderer {
         ],
       });
       const detailPass = encoder.beginRenderPass({
-        label: 'analytic droplets and thin sheets',
+        label: 'primary droplet silhouettes',
         colorAttachments: [this.detailHits!, this.detailNormals!].map(
           (texture) => ({
             view: texture.createView(),
@@ -381,30 +320,6 @@ export class WebGPURenderer {
       detailPass.setBindGroup(0, this.detailGroup);
       detailPass.drawIndirect(volume.detailDraw, 0);
       detailPass.end();
-      this.thicknessGroup ??= this.device.createBindGroup({
-        layout: this.thicknessLayout,
-        entries: [
-          { binding: 0, resource: { buffer: this.uniform } },
-          { binding: 1, resource: { buffer: volume.details } },
-          { binding: 2, resource: this.detailHits!.createView() },
-          { binding: 3, resource: this.detailNormals!.createView() },
-        ],
-      });
-      const thicknessPass = encoder.beginRenderPass({
-        label: 'local sheet optical thickness',
-        colorAttachments: [
-          {
-            view: this.sheetThickness!.createView(),
-            loadOp: 'clear',
-            storeOp: 'store',
-            clearValue: [0, 0, 0, 0],
-          },
-        ],
-      });
-      thicknessPass.setPipeline(this.thicknessPipeline);
-      thicknessPass.setBindGroup(0, this.thicknessGroup);
-      thicknessPass.drawIndirect(volume.detailDraw, 0);
-      thicknessPass.end();
     }
     let surface = this.surfaceGroups.get(sim.duck);
     if (!surface) {
@@ -423,7 +338,6 @@ export class WebGPURenderer {
           { binding: 9, resource: this.detailHits!.createView() },
           { binding: 10, resource: this.detailNormals!.createView() },
           { binding: 11, resource: { buffer: volume.details } },
-          { binding: 12, resource: this.sheetThickness!.createView() },
         ],
       });
       this.surfaceGroups.set(sim.duck, surface);
@@ -475,8 +389,6 @@ export class WebGPURenderer {
     this.detailHits?.destroy();
     this.detailNormals?.destroy();
     this.detailDepth?.destroy();
-    this.sheetThickness?.destroy();
-    this.thicknessGroup = null;
     this.detailGroup = null;
     this.surfaceGroups.clear();
     this.particleGroups.clear();

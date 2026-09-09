@@ -74,7 +74,7 @@ export class WebGPUVolume {
       new Uint32Array([+details, 0, 0, 0]),
     );
     const p = sim.writeParameters(4, {
-      forces: { gravity: 9.8, viscosity: 0.025, agitation: 0 },
+      forces: { gravity: sim.gravity, viscosity: 0.025, agitation: 0 },
     });
     // This fresh grid makes render-kernel gathering exact after pressure/contact corrections.
     sim.buildGrid(encoder, p);

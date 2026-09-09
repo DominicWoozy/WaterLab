@@ -1,0 +1,287 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
+import ts from 'typescript';
+
+// Exercise the real animation loop with a canvas that loses its image whenever
+// either backing dimension changes. GPU arithmetic has separate native tests.
+const source = await readFile(
+  new URL('../app/webgpu/engine.ts', import.meta.url),
+  'utf8',
+);
+const code = ts.transpileModule(source, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2022,
+  },
+}).outputText;
+const glSource = await readFile(
+  new URL('../app/water-engine.ts', import.meta.url),
+  'utf8',
+);
+const glCode = ts.transpileModule(glSource, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2022,
+  },
+}).outputText;
+async function harness(backend = 'webgpu') {
+  let frame,
+    observer,
+    width = 300,
+    height = 150,
+    now = 0,
+    hold = false;
+  let rect = { width: 1250, height: 800, left: 0, top: 0 };
+  const trace = [],
+    canvasEvents = [],
+    exports = {},
+    document = { hidden: false };
+  let presented = 'blank';
+  const context = {
+    configure() {},
+    unconfigure() {},
+    getCurrentTexture: () => ({ createView: () => ({}) }),
+  };
+  const gl = new Proxy(
+    {},
+    {
+      get(_target, key) {
+        if (key === 'drawArrays')
+          return () => {
+            trace.push('render', 'submit');
+            presented = 'water';
+          };
+        if (key.startsWith('create') || key === 'getUniformLocation')
+          return () => ({});
+        if (key === 'getShaderParameter' || key === 'getProgramParameter')
+          return () => true;
+        if (key === 'getAttribLocation') return () => 0;
+        return /^[A-Z_0-9]+$/.test(key) ? 1 : () => {};
+      },
+    },
+  );
+  const canvas = {
+    get width() {
+      return width;
+    },
+    set width(v) {
+      width = v;
+      presented = 'blank';
+      trace.push('resize');
+    },
+    get height() {
+      return height;
+    },
+    set height(v) {
+      height = v;
+      presented = 'blank';
+      trace.push('resize');
+    },
+    getContext: () => (backend === 'webgpu' ? context : gl),
+    getBoundingClientRect: () => rect,
+    addEventListener: (...v) => canvasEvents.push(v),
+    removeEventListener() {},
+    setPointerCapture() {},
+  };
+  const sim = {
+    quality: 50000,
+    count: 50000,
+    time: 0,
+    reset() {
+      this.time = 0;
+    },
+    step() {
+      this.time += 1 / 60;
+    },
+    destroy() {},
+  };
+  const volume = {
+    detailsEnabled: false,
+    encode(_e, _s, details) {
+      this.detailsEnabled = details;
+    },
+    destroy() {},
+  };
+  const renderer = {
+    loadModel: async () => {},
+    encode() {
+      trace.push('render');
+    },
+    destroy() {},
+  };
+  const factories = {
+    './duck-model': { loadDuckModel: () => ({ ready: true, destroy() {} }) },
+    './gpu-volume-config': { GPU_VOLUME_SIZE: [128, 160, 96] },
+    './fluid-volume': {
+      VOLUME_MIN: [-2, -1, -2],
+      VOLUME_MAX: [2, 4, 2],
+      SURFACE_DENSITY: 1.15,
+      ABSORPTION: [1, 0.2, 0.06],
+    },
+    './gpu-fluid': {
+      GpuFluid: class {
+        count = 15000;
+        quality = 15000;
+        time = 0;
+        update() {
+          this.time += 1 / 60;
+        }
+        destroy() {}
+      },
+    },
+    './water-shaders': {},
+    './simulation.ts': { WebGPUSimulation: { create: async () => sim } },
+    './volume.ts': { WebGPUVolume: { create: async () => volume } },
+    './renderer.ts': { WebGPURenderer: { create: async () => renderer } },
+  };
+  const settings = {
+    paused: false,
+    speed: 1,
+    mode: 'stir',
+    details: true,
+    surfaceTension: true,
+    gravity: 9.8,
+    agitation: 0,
+    viscosity: 0.025,
+    light: 1.3,
+    reflection: true,
+    caustics: true,
+    particles: false,
+  };
+  const device = {
+    addEventListener() {},
+    lost: new Promise(() => {}),
+    destroy() {},
+    createCommandEncoder: () => ({ finish: () => ({}) }),
+    queue: {
+      submit() {
+        trace.push('submit');
+        presented = 'water';
+      },
+      onSubmittedWorkDone: () =>
+        hold ? new Promise(() => {}) : Promise.resolve(),
+    },
+  };
+  vm.runInNewContext(backend === 'webgpu' ? code : glCode, {
+    exports,
+    require: (name) => factories[name],
+    window: { devicePixelRatio: 1 },
+    document,
+    navigator: { gpu: { getPreferredCanvasFormat: () => 'rgba8unorm' } },
+    performance: { now: () => now },
+    AbortController,
+    ResizeObserver: class {
+      constructor(f) {
+        observer = f;
+      }
+      observe() {}
+      disconnect() {}
+    },
+    requestAnimationFrame: (f) => ((frame = f), 1),
+    cancelAnimationFrame() {},
+    console,
+  });
+  const errors = [];
+  const createEngine =
+    backend === 'webgpu' ? exports.createWebGPUWater : exports.createWebGLWater;
+  const engine = await createEngine(
+    canvas,
+    () => settings,
+    () => {},
+    (e) => errors.push(e),
+    device,
+  );
+  return {
+    engine,
+    document,
+    settings,
+    trace,
+    errors,
+    get presented() {
+      return presented;
+    },
+    get width() {
+      return width;
+    },
+    resize(w, h) {
+      rect = { ...rect, width: w, height: h };
+      observer();
+    },
+    hold() {
+      hold = true;
+    },
+    async frame(t) {
+      now = t;
+      trace.length = 0;
+      frame(t);
+      await Promise.resolve();
+      await Promise.resolve();
+      return [...trace];
+    },
+  };
+}
+
+test('adaptive resolution never clears an already submitted frame', async () => {
+  const h = await harness();
+  for (let i = 1; i <= 45; i++) {
+    const trace = await h.frame(i * 100); // deliberately slow: exercise repeated downscaling
+    assert.equal(h.presented, 'water', `frame ${i} ends with a valid picture`);
+    assert.equal(trace.at(-1), 'submit');
+    if (trace.includes('resize'))
+      assert.ok(trace.lastIndexOf('resize') < trace.indexOf('render'));
+  }
+  assert.ok(h.width < 1250, 'adaptive resolution still reduces rendering cost');
+  assert.deepEqual(h.errors, []);
+  h.engine.destroy();
+});
+
+test('observer, paused mode and hidden frames do not clear the displayed image', async () => {
+  const h = await harness();
+  await h.frame(16);
+  h.settings.paused = true;
+  h.resize(1000, 700);
+  assert.equal(h.presented, 'water');
+  h.document.hidden = true;
+  assert.deepEqual(await h.frame(32), []);
+  assert.equal(h.presented, 'water');
+  h.document.hidden = false;
+  const trace = await h.frame(48);
+  assert.ok(trace.includes('resize'));
+  assert.equal(trace.at(-1), 'submit');
+  assert.equal(h.presented, 'water');
+  h.engine.destroy();
+});
+
+test('GPU backpressure defers resize together with the skipped frame', async () => {
+  const h = await harness();
+  await h.frame(16);
+  h.hold();
+  await h.frame(32);
+  await h.frame(48);
+  const width = h.width;
+  h.resize(800, 500);
+  assert.deepEqual(await h.frame(64), []);
+  assert.equal(h.width, width);
+  assert.equal(h.presented, 'water');
+  h.engine.destroy();
+});
+
+for (const dt of [16, 100])
+  test(`WebGL2 resizing never clears a completed frame (${dt} ms cadence)`, async () => {
+    const h = await harness('webgl');
+    for (let i = 1; i <= 160; i++) {
+      if (i === 20) {
+        h.resize(1200, 760);
+        assert.equal(h.presented, 'water');
+      }
+      const trace = await h.frame(i * dt);
+      assert.equal(h.presented, 'water');
+      assert.equal(trace.at(-1), 'submit');
+      if (trace.includes('resize'))
+        assert.ok(trace.lastIndexOf('resize') < trace.indexOf('render'));
+    }
+    assert.deepEqual(h.errors, []);
+    h.engine.destroy();
+  });

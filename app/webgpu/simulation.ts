@@ -3,6 +3,7 @@ import { ComputeKernel, buffer } from './compute.ts';
 import { gridShaders } from './grid-shaders.ts';
 import { fluidShaders } from './fluid-shaders.ts';
 import { duckShaders } from './duck-shaders.ts';
+import { capillaryShaders } from './capillary-shaders.ts';
 import type { FluidJob } from '../fluid-runtime.ts';
 export type WebGPUQuality = 15000 | 30000 | 50000;
 export type StepInput = Pick<FluidJob, 'forces' | 'brush'> & {
@@ -10,11 +11,14 @@ export type StepInput = Pick<FluidJob, 'forces' | 'brush'> & {
   splash?: number[];
   pourAt?: number[];
   previousCount?: number;
+  surfaceTension?: boolean;
+  capillaryMode?: 'implicit' | 'explicit';
 };
 export class WebGPUSimulation {
   count: number = 50000;
   quality: WebGPUQuality = 50000;
   time = 0;
+  gravity = 9.8;
   state: GPUBuffer;
   spare: GPUBuffer;
   duck: GPUBuffer;
@@ -26,6 +30,10 @@ export class WebGPUSimulation {
   private totals: GPUBuffer;
   private lambda: GPUBuffer;
   private factor: GPUBuffer;
+  readonly surface: GPUBuffer;
+  readonly capillaryRhs: GPUBuffer;
+  capillaryGuess: GPUBuffer;
+  private capillaryNext: GPUBuffer;
   private reactions: GPUBuffer;
   private reactionSpare: GPUBuffer;
   private reactionGroups: GPUBuffer;
@@ -50,6 +58,13 @@ export class WebGPUSimulation {
     this.totals = alloc('block totals', 128 * 4);
     this.lambda = alloc('pressure', CAPACITY * 16);
     this.factor = alloc('divergence factors', CAPACITY * 16);
+    this.surface = alloc('surface normals and density', CAPACITY * 16);
+    this.capillaryRhs = alloc(
+      'capillary rhs and inverse diagonal',
+      CAPACITY * 16,
+    );
+    this.capillaryGuess = alloc('capillary velocity a', CAPACITY * 16);
+    this.capillaryNext = alloc('capillary velocity b', CAPACITY * 16);
     this.reactions = alloc('particle reactions', CAPACITY * 32);
     this.reactionSpare = alloc('sorted reactions', CAPACITY * 32);
     this.reactionGroups = alloc('reaction groups', 256 * 32);
@@ -71,6 +86,7 @@ export class WebGPUSimulation {
         ...gridShaders,
         ...fluidShaders,
         ...duckShaders,
+        ...capillaryShaders,
       }))
         sim.kernels.set(name, await ComputeKernel.create(device, name, code));
       return sim;
@@ -99,7 +115,16 @@ export class WebGPUSimulation {
       4,
     );
     f.set(
-      [input.forces.viscosity, input.forces.agitation, input.shake ?? 0, 0],
+      [
+        input.forces.viscosity,
+        input.forces.agitation,
+        input.shake ?? 0,
+        (input.surfaceTension ?? true)
+          ? input.capillaryMode === 'implicit'
+            ? 2
+            : 1
+          : 0,
+      ],
       8,
     );
     const b = input.brush;
@@ -125,6 +150,7 @@ export class WebGPUSimulation {
       5: this.lambda,
       6: this.duck,
       7: this.reactions,
+      8: this.surface,
     };
     this.kernels
       .get(name)!
@@ -135,6 +161,31 @@ export class WebGPUSimulation {
   }
   private swapDuck() {
     [this.duck, this.duckSpare] = [this.duckSpare, this.duck];
+  }
+  solveCapillary(pass: GPUComputePassEncoder, p: GPUBuffer) {
+    const bindings = () => ({
+      4: this.surface,
+      8: this.factor,
+      5: this.capillaryRhs,
+      6: this.capillaryGuess,
+      7: this.capillaryNext,
+    });
+    const swap = () => {
+      [this.capillaryGuess, this.capillaryNext] = [
+        this.capillaryNext,
+        this.capillaryGuess,
+      ];
+    };
+    this.run(pass, 'capillaryPrepare', p, bindings());
+    swap();
+    // Optional bounded comparison path; the interactive default fuses explicit
+    // cohesion into viscosity. No global reduction or CPU synchronization.
+    for (let iteration = 0; iteration < 4; iteration++) {
+      this.run(pass, 'capillaryIterate', p, bindings());
+      swap();
+    }
+    this.run(pass, 'capillaryApply', p, bindings());
+    this.swap();
   }
   reset(encoder: GPUCommandEncoder, quality: WebGPUQuality = 50000) {
     this.quality = quality;
@@ -190,6 +241,7 @@ export class WebGPUSimulation {
     pass.end();
   }
   step(encoder: GPUCommandEncoder, input: StepInput, slot = 0) {
+    this.gravity = input.forces.gravity;
     const p = this.writeParameters(slot * 2, input),
       first = this.writeParameters(slot * 2 + 1, input, true);
     let pass = encoder.beginComputePass({ label: 'predict' });
@@ -225,9 +277,13 @@ export class WebGPUSimulation {
     }
     this.run(pass, 'velocity', p);
     this.swap();
+    // Reuse the factor gradient for general surface normals and fuse cohesion
+    // into viscosity; no sheet classification or additional default traversal.
+    this.run(pass, 'factor', p, { 4: this.lambda, 5: this.factor });
     this.run(pass, 'viscosity', p);
     this.swap();
-    this.run(pass, 'factor', p, { 4: this.lambda, 5: this.factor });
+    if ((input.surfaceTension ?? true) && input.capillaryMode === 'implicit')
+      this.solveCapillary(pass, p);
     for (let iteration = 0; iteration < 2; iteration++) {
       this.run(pass, 'residual', p);
       this.run(pass, 'project', p, { 4: this.lambda, 5: this.factor });

@@ -134,7 +134,7 @@ for (const [x, y, z] of [
     const s = shapes.subarray(i * 16, i * 16 + 16);
     let b = Math.max(0, Math.min(1, (s[3] - 0.15) / 1.05));
     b = b * b * (3 - 2 * b);
-    const r = Math.max(0.095, (0.1 + 0.09 * b) * scale);
+    const r = (0.1 + 0.09 * b) * scale;
     const d = p.map((v, a) => (v - s[a]) / r);
     let r2 = 0;
     for (let row = 0; row < 3; row++)

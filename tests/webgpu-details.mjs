@@ -148,6 +148,7 @@ async function png(path, pixels) {
     ]),
   );
 }
+// Unified field + sub-voxel primary droplet silhouettes. No sheet proxy layer.
 let images = [];
 for (const enabled of [false, true]) {
   e = device.createCommandEncoder();
@@ -168,40 +169,45 @@ for (const enabled of [false, true]) {
     assert.equal(counts[1], 0);
     continue;
   }
-  assert.equal(counts[0], 6);
-  assert.ok(
-    counts[1] > positions.length * 0.8 && counts[1] <= positions.length,
+  assert.equal(
+    counts[1],
+    drops.length,
+    'only existing isolated primaries need analytic silhouettes',
   );
   const features = new Float32Array(await read(volume.details)),
-    state = new Float32Array(await read(sim.state));
-  let droplets = 0,
-    sheets = 0;
-  const mass = (((2 * Math.PI) / 15) * (0.17 * Math.cbrt(0.2)) ** 3) / 3.6;
+    state = new Float32Array(await read(sim.state)),
+    shapes = new Float32Array(await read(volume.shapes));
+  const oldRadius = 0.17 * Math.cbrt(0.2) * Math.cbrt(0.1 / 3.6);
   for (let i = 0; i < counts[1]; i++) {
     const d = features.subarray(i * 16, i * 16 + 16);
-    assert.ok(d.every(Number.isFinite));
-    if (d[3] === 1) droplets++;
-    if (d[3] === 2) sheets++;
-    const j = d[11];
-    assert.ok(j < sim.count);
-    for (let a = 0; a < 3; a++) assert.equal(d[a], state[j * 12 + a]);
-    const m = [d[4], d[8], d[12], d[5], d[9], d[13], d[6], d[10], d[14]];
-    const det =
-      m[0] * (m[4] * m[8] - m[5] * m[7]) -
-      m[1] * (m[3] * m[8] - m[5] * m[6]) +
-      m[2] * (m[3] * m[7] - m[4] * m[6]);
-    const v = (4 * Math.PI) / 3 / Math.sqrt(det);
-    assert.ok(Math.abs(v / mass - 1) < 0.002);
+    assert.equal(d[3], 1, 'no flat sheet proxies');
+    assert.ok(
+      Math.abs(d[7] / oldRadius - 0.72) < 1e-5,
+      'only rendered droplet radius shrinks',
+    );
+    const source = d[11];
+    for (let a = 0; a < 3; a++) assert.equal(d[a], state[source * 12 + a]);
   }
-  assert.equal(droplets, drops.length);
-  assert.ok(sheets > 700);
-  // No change to physics positions (compare by persistent identity through GPU reorder).
+  assert.equal(sim.count, positions.length);
   for (let i = 0; i < sim.count; i++) {
     const id = state[i * 12 + 11];
     for (let a = 0; a < 3; a++)
       assert.equal(state[i * 12 + a], data[id * 12 + a]);
+    assert.ok(
+      shapes[i * 16 + 15] > 0,
+      'every primary contributes to the common density field',
+    );
   }
-  // Inspect the actual detail render target, not just whether the final scene has color.
+  assert.equal(
+    volume.spray,
+    undefined,
+    'no extra particle simulation is constructed',
+  );
+  assert.equal(
+    renderer.sheetNormal,
+    undefined,
+    'no sheet-only smoothing target',
+  );
   const tex = renderer.detailHits,
     dst = device.createBuffer({
       size: w * h * 16,
@@ -220,13 +226,7 @@ for (const enabled of [false, true]) {
   const hits = new Float32Array(range.slice(0));
   dst.unmap();
   assert.ok(hits.every(Number.isFinite));
-  const hole = pixel([0, 0.25, 0]);
-  assert.equal(
-    hits[(hole[0] + w * hole[1]) * 4 + 1],
-    0,
-    'Actual sheet hole remains empty',
-  );
-  let measured = [];
+  const measured = [];
   for (const p of drops) {
     const [cx, cy] = pixel(p);
     let area = 0;
@@ -235,121 +235,65 @@ for (const enabled of [false, true]) {
         const at = (x + w * y) * 4;
         if (hits[at + 3] === 1) area += hits[at + 2];
       }
-    assert.ok(
-      area > 80 && area < 400,
-      'Analytic drop has a small but visible footprint',
-    );
+    assert.ok(area > 40 && area < 200);
     measured.push(area);
   }
-  const sample = pixel([0.3, 0.25 + 0.07 * Math.sin(1.2), 0]);
-  const optical = device.createBuffer({
-    size: 768,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
-  e = device.createCommandEncoder();
-  for (const [texture, p, offset] of [
-    [renderer.sheetThickness, hole, 0],
-    [renderer.sheetThickness, sample, 256],
-    [renderer.detailNormals, sample, 512],
-  ])
-    e.copyTextureToBuffer(
-      { texture, origin: [...p, 0] },
-      { buffer: optical, offset, bytesPerRow: 256 },
-      [1, 1],
-    );
-  device.queue.submit([e.finish()]);
-  await optical.mapAsync(GPUMapMode.READ);
-  const opticalRange = optical.getMappedRange();
-  kept.push([optical, opticalRange]);
-  const half = new Uint16Array(opticalRange.slice(0));
-  optical.unmap();
-  const f16 = (u) => {
-    const e = (u >>> 10) & 31;
-    const m = u & 1023;
-    return (
-      (u & 32768 ? -1 : 1) *
-      (e === 0
-        ? m * 2 ** -24
-        : e === 31
-          ? Infinity
-          : (1 + m / 1024) * 2 ** (e - 15))
-    );
-  };
-  const totalThickness = f16(half[128]),
-    nearestChord = f16(half[259]);
-  assert.equal(f16(half[0]), 0);
-  assert.ok(totalThickness > nearestChord * 1.5);
-  const normal = [f16(half[256]), f16(half[257]), f16(half[258])];
-  const qx = (sample[0] + 0.5 - w / 2) / h + 0.19,
-    qy = (h / 2 - sample[1] - 0.5) / h;
-  const ray = norm(
-    forward.map((v, i) => v * 1.55 + right[i] * qx + up[i] * qy),
-  );
-  const nearT = hits[(sample[0] + sample[1] * w) * 4];
-  let expectedThickness = 0;
-  const dot = (a, b) => a.reduce((v, x, i) => v + x * b[i], 0);
-  for (let i = 0; i < counts[1]; i++) {
-    const d = features.subarray(i * 16, i * 16 + 16);
-    if (d[3] < 1.5) continue;
-    const columns = [
-      [d[4], d[5], d[6]],
-      [d[8], d[9], d[10]],
-      [d[12], d[13], d[14]],
-    ];
-    const mul = (v) =>
-      [0, 1, 2].map((r) => columns.reduce((sum, c, j) => sum + c[r] * v[j], 0));
-    const origin = eye.map((x, j) => x - d[j]);
-    const a = dot(ray, mul(ray)),
-      b = dot(origin, mul(ray)),
-      closest = origin.map((v, j) => v - (ray[j] * b) / a),
-      delta = 1 - dot(closest, mul(closest));
-    if (delta < 0) continue;
-    const root = Math.sqrt(delta / a),
-      t = -b / a - root;
-    if (t < 0.1 || Math.abs(t - nearT) > 0.08) continue;
-    const axis = columns.reduce((a, b) => (dot(a, a) > dot(b, b) ? a : b));
-    if (Math.abs(dot(norm(axis), normal)) < 0.85) continue;
-    expectedThickness += root * 2;
-  }
-  assert.ok(Math.abs(totalThickness / expectedThickness - 1) < 0.015, {
-    totalThickness,
-    expectedThickness,
-  });
-  console.log({ totalThickness, nearestChord, expectedThickness });
   console.log({
-    particles: sim.count,
-    droplets,
-    sheets,
-    dropPixelAreas: measured,
-    hole,
+    primaryParticles: sim.count,
+    analyticPrimaries: counts[1],
+    radiusRatio: 0.72,
+    renderedVolumeRatio: 0.72 ** 3,
+    pixelAreas: measured,
   });
 }
-let changed = 0;
-for (let i = 0; i < images[0].length; i += 4)
-  if (
-    Math.abs(images[0][i] - images[1][i]) +
-      Math.abs(images[0][i + 1] - images[1][i + 1]) +
-      Math.abs(images[0][i + 2] - images[1][i + 2]) >
-    8
-  )
-    changed++;
-assert.ok(changed > 500);
-await png('/private/tmp/water-details-before.png', images[0]);
-await png('/private/tmp/water-details-after.png', images[1]);
-// Turning off the experiment clears indirect counts; empty state cannot resurrect old features.
-e = device.createCommandEncoder();
-volume.encode(e, sim, false);
-device.queue.submit([e.finish()]);
-assert.equal(new Uint32Array(await read(volume.detailDraw))[1], 0);
+await png('/private/tmp/water-unified-before.png', images[0]);
+await png('/private/tmp/water-unified-after.png', images[1]);
+const center = [
+  -2.08 + (64 / 127) * 4.16,
+  -1.12 + (50 / 159) * 5.2,
+  -1.56 + (48 / 95) * 3.12,
+];
+async function pair(distance) {
+  sim.count = 2;
+  const a = new Float32Array(24);
+  for (let i = 0; i < 2; i++) {
+    const p = [center[0] + (i - 0.5) * distance, center[1], center[2]];
+    a.set([...p, 1, ...p, 1, 0, 0, 0, i], i * 12);
+  }
+  device.queue.writeBuffer(sim.state, 0, a);
+  e = device.createCommandEncoder();
+  volume.encode(e, sim, true);
+  device.queue.submit([e.finish()]);
+  const density = new Float32Array(await read(volume.density));
+  const count = new Uint32Array(await read(volume.detailDraw))[1];
+  assert.ok(count <= 2);
+  return density[64 + 128 * (50 + 160 * 48)];
+}
+const separated = await pair(0.14),
+  merged = await pair(0.045);
+assert.equal(
+  separated,
+  0,
+  'separated primary drops have no artificial connecting layer',
+);
+assert.ok(
+  merged > 1.15,
+  'nearby primary kernels form a common surface through their midpoint',
+);
+console.log({
+  separatedMidpointDensity: separated,
+  mergedMidpointDensity: merged,
+  iso: 1.15,
+});
 sim.count = 0;
 e = device.createCommandEncoder();
 volume.encode(e, sim, true);
 device.queue.submit([e.finish()]);
 assert.equal(new Uint32Array(await read(volume.detailDraw))[1], 0);
+assert.ok(new Float32Array(await read(volume.density)).every((v) => v === 0));
 assert.deepEqual(errors, []);
 assert.equal(lost, undefined);
 console.log(
-  'PASS analytic volumes, holes, coverage, physics untouched, A/B and empty reset',
+  'PASS unchanged main particles, smaller visible drops, unified density fusion, no sheet/spray layer, empty reset',
 );
-await device.queue.onSubmittedWorkDone();
 process.exit(0);

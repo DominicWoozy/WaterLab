@@ -1,4 +1,5 @@
 import { common, neighbors } from './common.ts';
+import { tensionCommon } from './surface-tension-shaders.ts';
 const bindings = /* wgsl */ `
 struct Reaction { linear:vec4f, angular:vec4f }
 @group(0) @binding(1) var<storage,read> input:array<Particle>;
@@ -8,9 +9,11 @@ struct Reaction { linear:vec4f, angular:vec4f }
 @group(0) @binding(5) var<storage,read_write> auxOut:array<vec4f>;
 @group(0) @binding(6) var<storage,read> duck:Duck;
 @group(0) @binding(7) var<storage,read_write> reactions:array<Reaction>;
+@group(0) @binding(8) var<storage,read_write> surface:array<vec4f>;
 `;
 const kernel = (body: string) =>
   common +
+  tensionCommon +
   bindings +
   /* wgsl */ `
 @compute @workgroup_size(128) fn main(@builtin(global_invocation_id) gid:vec3u){
@@ -31,14 +34,14 @@ export const fluidShaders: Record<string, string> = {
  fn random(x:f32)->f32 {return fract(sin(x*127.1+P.clock.y*311.7)*43758.5453);}
  @compute @workgroup_size(128) fn main(@builtin(global_invocation_id) gid:vec3u){
  let i=gid.x;if(i>=P.counts.x){return;}var a=input[i];var p=a.pos.xyz;var v=a.vel.xyz;
- if(i>=P.counts.z){let f=f32(i);p=vec3f(P.motion.z+(random(f)-.5)*.29,1.8+random(f+33.)*.25,P.motion.w+(random(f+61.)-.5)*.29);v=vec3f(0.,-1.4,0.);a.vel.w=f;}
+ if(i>=P.counts.z){let f=f32(i);p=vec3f(P.motion.z+(random(f)-.5)*.29,1.8+random(f+33.)*.25,P.motion.w+(random(f+61.)-.5)*.29);v=vec3f(0.,-1.4,0.);a.vel.w=f;a.pos.w=1.;}
  a.old=vec4f(p,select(0.,1.,i<P.counts.z));
  let dt=P.clock.x;let t=P.clock.y;v.y-=P.clock.w*dt;
  v.x+=(P.forces.z+sin(t*2.1+p.z*3.)*P.forces.y*2.)*dt;v.z+=cos(t*1.7+p.x*2.)*P.forces.y*dt;
  let d=p-P.brush.xyz;let w=exp(-dot(d,d)/.32)*P.brush.w;
  v+=vec3f(P.motion.x-d.z*3.,.65,P.motion.y+d.x*3.)*w*dt*12.;
  let sd=p.xz-P.splash.xy;let sw=exp(-dot(sd,sd)/.18)*P.splash.z;
- v+=vec3f(sd.x*2.,1.6,sd.y*2.)*sw;a.pos=vec4f(bound(p+limited(v,12.)*dt),1.);output[i]=a;
+ v+=vec3f(sd.x*2.,1.6,sd.y*2.)*sw;a.pos=vec4f(bound(p+limited(v,12.)*dt),a.pos.w);output[i]=a;
  }`,
   lambda: kernel(/* wgsl */ `
  let p=input[i].pos.xyz;let wall=wallSupport(p)+duckSupport(p,duck);
@@ -55,20 +58,29 @@ export const fluidShaders: Record<string, string> = {
  let impulse=-particleMass()*(boundaryDelta*limiter+contact)/P.clock.x;
  var reaction=Reaction(vec4f(0.),vec4f(0.));if(P.counts.w==0u){reaction=reactions[i];}
  reaction.linear+=vec4f(impulse,0.);reaction.angular+=vec4f(cross(p-duck.pos.xyz,impulse),0.);reactions[i]=reaction;
- var a=input[i];a.pos=vec4f(next,1.);output[i]=a;
+ var a=input[i];a.pos=vec4f(next,a.pos.w);output[i]=a;
  `),
   velocity: kernel(/* wgsl */ `
  var a=input[i];var v=(a.pos.xyz-a.old.xyz)/P.clock.x;if(a.old.w<.5){v=vec3f(0.,-1.4,0.);}
  a.vel=vec4f(limited(v,12.)*.998,a.vel.w);output[i]=a;
  `),
   viscosity: kernel(/* wgsl */ `
- let p=input[i].pos.xyz;let v=input[i].vel.xyz;var delta=vec3f(0.);
- ${neighbors('delta+=(input[j].vel.xyz-v)*q*q;')}
- var a=input[i];a.vel=vec4f(limited(v+delta*(.002+P.forces.x*.065),12.),a.vel.w);output[i]=a;
+ let p=input[i].pos.xyz;let v=input[i].vel.xyz;var delta=vec3f(0.);var capillary=vec3f(0.);
+ ${neighbors(`delta+=(input[j].vel.xyz-v)*q*q;
+ if(P.forces.w>0.){
+  let f=surfacePair(surface[i],surface[j],diff,r,aux[i].z,aux[j].z);let n=diff/r;
+  // Pairwise radial dissipation resolves capillary oscillation at the fixed dt.
+  // Equal/opposite and central; no damping of rigid translation or rotation.
+  let damping=min(2.*sqrt(abs(f)/max(r,.15*h())),.25/(P.clock.x*max(1.,max(aux[i].z,aux[j].z))));
+  capillary+=n*(damping*dot(input[j].vel.xyz-v,n)-select(0.,f,P.forces.w==1.));
+ }`)}
+ var a=input[i];a.vel=vec4f(limited(v+delta*(.002+P.forces.x*.065)+capillary*P.clock.x,12.),a.vel.w);output[i]=a;
  `),
   factor: kernel(/* wgsl */ `
  let p=input[i].pos.xyz;let wall=wallSupport(p)+duckSupport(p,duck);var rho=wall.w;var sum=0.;var nearby=0.;var grad=wall.xyz;
  ${neighbors('rho+=q*q;grad+=gradient;sum+=dot(gradient,gradient);nearby+=1.;')}
+ // Include boundary support in normals, but add no wall attraction.
+ surface[i]=vec4f(limited(-h()*grad,2.),(rho+1.)/REST);
  var f=0.;if(nearby>=12.&&rho>REST*.4){f=1./max(sum+dot(grad,grad),1e-6);}
  auxOut[i]=vec4f(f,rho/REST,nearby,0.);
  `),

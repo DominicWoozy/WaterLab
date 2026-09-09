@@ -14,6 +14,7 @@ const features =
   !process.env.UNFILTERED && adapter.features.has('float32-filterable')
     ? ['float32-filterable']
     : [];
+if (adapter.features.has('timestamp-query')) features.push('timestamp-query');
 const device = await adapter.requestDevice({ requiredFeatures: features });
 const errors = [];
 let lost;
@@ -33,7 +34,12 @@ renderer.setModel(
 const n = Number(process.argv[2] || 50000),
   w = 1250,
   h = 800,
-  frames = process.env.DETAILS === 'alternate' ? 140 : 80;
+  frames =
+    process.env.DETAILS === 'alternate' ||
+    process.env.TENSION === 'alternate' ||
+    process.env.CAPILLARY === 'alternate'
+      ? 140
+      : 80;
 const image = device.createTexture({
   size: [w, h],
   format: 'rgba8unorm',
@@ -48,6 +54,9 @@ const forces = { gravity: 9.8, viscosity: 0.025, agitation: 0 };
 for (let i = 0; i < 120; i++) {
   e = device.createCommandEncoder();
   sim.step(e, {
+    surfaceTension: process.env.TENSION !== '0',
+    capillaryMode:
+      process.env.CAPILLARY === 'implicit' ? 'implicit' : 'explicit',
     forces: rough ? { ...forces, agitation: 1.4 } : forces,
     shake: rough && i < 30 ? 12 : 0,
     splash: rough && i % 60 === 0 ? [0.5, 0.3, 2] : undefined,
@@ -92,6 +101,48 @@ const eye = [
   forward = norm([-eye[0], -0.05 - eye[1], -eye[2]]),
   right = norm(cross(forward, [0, 1, 0])),
   up = cross(right, forward);
+// GPU timestamps separate command-stream time from host completion scheduling.
+// Instrument only the benchmark; production render/compute paths are unchanged.
+const timing = features.includes('timestamp-query')
+  ? device.createQuerySet({ type: 'timestamp', count: frames * 2 })
+  : null;
+function timedEncoder(frame) {
+  const encoder = device.createCommandEncoder();
+  if (!timing) return encoder;
+  return new Proxy(encoder, {
+    get(target, key) {
+      if (key === 'beginComputePass')
+        return (descriptor) =>
+          target.beginComputePass(
+            descriptor?.label === 'predict'
+              ? {
+                  ...descriptor,
+                  timestampWrites: {
+                    querySet: timing,
+                    beginningOfPassWriteIndex: frame * 2,
+                  },
+                }
+              : descriptor,
+          );
+      if (key === 'beginRenderPass')
+        return (descriptor) =>
+          target.beginRenderPass(
+            descriptor?.label === 'water and duck'
+              ? {
+                  ...descriptor,
+                  timestampWrites: {
+                    querySet: timing,
+                    endOfPassWriteIndex: frame * 2 + 1,
+                  },
+                }
+              : descriptor,
+          );
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+const frameModes = [];
 const pairs = [];
 const byMode = { on: [], off: [] };
 const phases = { physics: [], density: [], render: [] };
@@ -100,13 +151,23 @@ const split = !profile && process.env.SPLIT !== '0';
 let start = performance.now();
 for (let frame = 0; frame < frames; frame++) {
   const commands = [];
-  e = device.createCommandEncoder();
+  e = timedEncoder(frame);
   if (paired) {
     e.copyBufferToBuffer(seed, 0, sim.state, 0, seed.size);
     e.copyBufferToBuffer(duckSeed, 0, sim.duck, 0, 64);
     sim.time = anchorTime;
   }
+  const tensionMode =
+    process.env.TENSION === 'alternate'
+      ? Math.floor(frame / (paired ? 2 : 20)) % 2 === 0
+      : process.env.TENSION !== '0';
+  const implicit =
+    process.env.CAPILLARY === 'alternate'
+      ? Math.floor(frame / 2) % 2 === 0
+      : process.env.CAPILLARY === 'implicit';
   sim.step(e, {
+    surfaceTension: tensionMode,
+    capillaryMode: implicit ? 'implicit' : 'explicit',
     forces: rough ? { ...forces, agitation: 1.4 } : forces,
     shake: !paired && rough && frame < 20 ? 12 : 0,
     splash: !paired && rough && frame % 40 === 0 ? [0.5, 0.3, 2] : undefined,
@@ -115,17 +176,24 @@ for (let frame = 0; frame < frames; frame++) {
     process.env.DETAILS === 'alternate'
       ? Math.floor(frame / (paired ? 2 : 20)) % 2 === 0
       : process.env.DETAILS !== '0';
+  frameModes.push(
+    process.env.CAPILLARY === 'alternate'
+      ? implicit
+      : process.env.TENSION === 'alternate'
+        ? tensionMode
+        : detailMode,
+  );
   let phaseStart = performance.now();
   if (profile) {
     device.queue.submit([e.finish()]);
     await device.queue.onSubmittedWorkDone();
     if (frame >= 20) phases.physics.push(performance.now() - phaseStart);
     phaseStart = performance.now();
-    e = device.createCommandEncoder();
+    e = timedEncoder(frame);
   }
   if (split) {
     commands.push(e.finish());
-    e = device.createCommandEncoder();
+    e = timedEncoder(frame);
   }
   volume.encode(e, sim, detailMode);
   if (detailMode)
@@ -135,11 +203,11 @@ for (let frame = 0; frame < frames; frame++) {
     await device.queue.onSubmittedWorkDone();
     if (frame >= 20) phases.density.push(performance.now() - phaseStart);
     phaseStart = performance.now();
-    e = device.createCommandEncoder();
+    e = timedEncoder(frame);
   }
   if (split) {
     commands.push(e.finish());
-    e = device.createCommandEncoder();
+    e = timedEncoder(frame);
   }
   renderer.encode(
     e,
@@ -161,11 +229,61 @@ for (let frame = 0; frame < frames; frame++) {
     const now = performance.now();
     if (frame >= 20) {
       pairs.push((now - start) / 2);
-      byMode[detailMode ? 'on' : 'off'].push((now - start) / 2);
+      byMode[
+        (
+          process.env.CAPILLARY === 'alternate'
+            ? implicit
+            : process.env.TENSION === 'alternate'
+              ? tensionMode
+              : detailMode
+        )
+          ? 'on'
+          : 'off'
+      ].push((now - start) / 2);
     }
     start = now;
   }
   assert.equal(lost, undefined, JSON.stringify(lost));
+}
+let gpuTiming;
+if (timing) {
+  const resolve = device.createBuffer({
+    size: frames * 16,
+    usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+  });
+  const mapped = device.createBuffer({
+    size: frames * 16,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+  const encoder = device.createCommandEncoder();
+  encoder.resolveQuerySet(timing, 0, frames * 2, resolve, 0);
+  encoder.copyBufferToBuffer(resolve, 0, mapped, 0, frames * 16);
+  device.queue.submit([encoder.finish()]);
+  await mapped.mapAsync(GPUMapMode.READ);
+  const range = mapped.getMappedRange();
+  globalThis.timestampReadback = [resolve, mapped, range];
+  const values = new BigUint64Array(range.slice(0));
+  mapped.unmap();
+  const modes = { on: [], off: [] };
+  for (let frame = 20; frame < frames; frame++)
+    modes[frameModes[frame] ? 'on' : 'off'].push(
+      Number(values[frame * 2 + 1] - values[frame * 2]) / 1e6,
+    );
+  gpuTiming = Object.fromEntries(
+    Object.entries(modes)
+      .filter(([, a]) => a.length)
+      .map(([mode, a]) => {
+        a.sort((x, y) => x - y);
+        return [
+          mode,
+          {
+            mean: a.reduce((x, y) => x + y, 0) / a.length,
+            p50: a[Math.floor(a.length * 0.5)],
+            p95: a[Math.floor(a.length * 0.95)],
+          },
+        ];
+      }),
+  );
 }
 const stride = Math.ceil((w * 4) / 256) * 256;
 const output = device.createBuffer({
@@ -263,7 +381,13 @@ console.log(
       scene: rough ? 'rough' : 'calm',
       paired,
       detailCount: new Uint32Array(densityCopy)[3],
-      detail_modes: Object.fromEntries(
+      comparison:
+        process.env.CAPILLARY === 'alternate'
+          ? 'implicit (on) / explicit (off) capillary'
+          : process.env.TENSION === 'alternate'
+            ? 'surface tension'
+            : 'detail reconstruction',
+      modes: Object.fromEntries(
         Object.entries(byMode)
           .filter(([, a]) => a.length)
           .map(([k, a]) => {
@@ -278,6 +402,7 @@ console.log(
             ];
           }),
       ),
+      gpu_command_span_ms: gpuTiming,
       completed_frame_ms: {
         mean: pairs.reduce((a, b) => a + b) / pairs.length,
         p50: sorted[Math.floor(sorted.length * 0.5)],

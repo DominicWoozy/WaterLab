@@ -17,7 +17,6 @@ struct Duck {pos:vec4f,rotation:vec4f,vel:vec4f,omega:vec4f}
 @group(0) @binding(9) var detailHits:texture_2d<f32>;
 @group(0) @binding(10) var detailNormals:texture_2d<f32>;
 @group(0) @binding(11) var<storage,read> details:array<Detail>;
-@group(0) @binding(12) var sheetThickness:texture_2d<f32>;
 const VMIN=vec3f(-2.08,-1.12,-1.56);const VMAX=vec3f(2.08,4.08,1.56);const VSIZE=vec3f(128.,160.,96.);
 var<private> volumeTop:f32;
 struct VertexOut {@builtin(position) position:vec4f,@location(0) uv:vec2f}
@@ -101,13 +100,12 @@ fn room(ro:vec3f,rd:vec3f)->vec3f {
  return c;
 }
 fn scene(ro:vec3f,rd:vec3f)->vec3f {let floorT=(-.97-ro.y)/rd.y;let hit=duckTrace(ro,rd,select(1e5,floorT,floorT>0.));if(hit.y>=0.){return duckShade(hit,rd);}return room(ro,rd);}
-fn waterColor(p:vec3f,n:vec3f,rd:vec3f,detailId:u32,viewThickness:f32)->vec3f {
+fn waterColor(p:vec3f,n:vec3f,rd:vec3f,detailId:u32)->vec3f {
   let refracted=refract(rd,n,1./1.333);var exitPoint=p+refracted*.003;var exitRay=refracted;var thickness=0.;
   if(detailId>0u){
    let d=details[detailId-1u];let chord=detailRoots(d,p+refracted*.00001,refracted);let distance=max(0.,chord.y);
    thickness=distance;exitPoint=p+refracted*(distance+.00002);
-   if(d.center.w<1.5){let exitNormal=normalize(detailMetric(d)*(exitPoint-d.center.xyz));let outside=refract(refracted,-exitNormal,1.333);if(dot(outside,outside)>.1){exitRay=normalize(outside);}}
-   else{exitRay=rd;thickness=viewThickness*abs(dot(n,rd))/max(abs(dot(n,refracted)),.1);}
+   {let exitNormal=normalize(detailMetric(d)*(exitPoint-d.center.xyz));let outside=refract(refracted,-exitNormal,1.333);if(dot(outside,outside)>.1){exitRay=normalize(outside);}}
   }
   thickness+=opticalPath(exitPoint,exitRay);let absorb=exp(-vec3f(1.25,.2,.065)*thickness);
   var samplePoint=exitPoint;if(detailId==0u){samplePoint=p+refracted*.006;}
@@ -126,22 +124,14 @@ struct FragmentOut {@location(0) color:vec4f,@builtin(frag_depth) depth:f32}
  if(found){
   for(var i=0;i<7;i++){let mid=(at+last)*.5;if(density(S.eye.xyz+rd*mid)>S.config.x){at=mid;}else{last=mid;}}
   let p=S.eye.xyz+rd*at;var n=normalAt(p);if(dot(n,rd)>0.){n=-n;}
-  color=waterColor(p,n,rd,0u,0.);
+  color=waterColor(p,n,rd,0u);
  }
  if(S.eye.w>.5&&S.light.w<.5){
   let pixel=vec2i(in.position.xy);let hit=textureLoad(detailHits,pixel,0);
   if(hit.y>.5&&hit.x<primaryDuck.x&&(!found||hit.x<at)){
    var n=normalize(textureLoad(detailNormals,pixel,0).xyz);
-   if(hit.w>1.5){
-    // Five local taps only on sheets. Reject depth/normal discontinuities, and
-    // never fill an empty pixel: disconnected drops and sheet holes stay separate.
-    var sum=n*2.;var weight=2.;let offsets=array<vec2i,4>(vec2i(1,0),vec2i(-1,0),vec2i(0,1),vec2i(0,-1));
-    for(var j=0;j<4;j++){let atPixel=clamp(pixel+offsets[j],vec2i(0),vec2i(S.view.xy)-1);let other=textureLoad(detailHits,atPixel,0);let nn=textureLoad(detailNormals,atPixel,0).xyz;
-     if(other.w>1.5&&abs(other.x-hit.x)<.025&&dot(n,nn)>.85){sum+=nn;weight+=1.;}}
-    n=normalize(sum/weight);
-   }
    let p=S.eye.xyz+rd*hit.x;if(dot(n,rd)>0.){n=-n;}
-   color=mix(color,waterColor(p,n,rd,u32(hit.y),textureLoad(sheetThickness,pixel,0).r),hit.z);
+   color=mix(color,waterColor(p,n,rd,u32(hit.y)),hit.z);
   }
  }
  if(S.brush.w>.5){let t=(S.brush.y-S.eye.y)/rd.y;if(t>0.){let p=S.eye.xyz+rd*t;let ring=exp(-pow((length(p.xz-S.brush.xz)-.48)*110.,2.));color+=vec3f(.2,.65,.5)*ring*.55;}}

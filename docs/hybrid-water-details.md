@@ -1,5 +1,15 @@
 # Hybrid droplets and thin sheets — 2026-09-08
 
+> Historical experiment: superseded locally by [unified primary water](unified-primary-water.md).
+> The current app has no sheet-specific physics/render pass and no secondary droplets.
+
+
+The original rendering experiment below has a subsequent local-only
+[capillary physics and droplet-size update](thin-film-physics.md). Its optional
+physics mode limits sheet support to .49h, and the current sparse-drop classifier
+and volume-kernel scaling are documented there. The original measurements below
+refer to the first published rendering implementation.
+
 The WebGPU lighting panel now has “精细水滴与薄片”, enabled by default.
 Turning it off rebuilds the original volume even when paused; particle debug
 still skips reconstruction, and WebGL2 keeps its original renderer.

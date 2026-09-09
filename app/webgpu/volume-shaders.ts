@@ -28,34 +28,26 @@ export const volumeShaders: Record<string, string> = {
  ${neighbors('let w=q*q*q;total+=w;mean-=diff*w;cov+=mat3x3f(diff*diff.x,diff*diff.y,diff*diff.z)*w;rho+=q*q;nearby+=1.;')}
  mean/=total;cov=cov*(1./total)-mat3x3f(mean*mean.x,mean*mean.y,mean*mean.z);
  let tr=max(cov[0][0]+cov[1][1]+cov[2][2],1e-8);
- var kind=0.;var sheetNormal=vec3f(0.,1.,0.);
+ // Small isolated primary droplets retain an analytic sub-voxel silhouette.
+ // Fade this fallback out as neighbors build a continuous density surface.
+ // Every primary particle always contributes to that field; there are no sheets
+ // or separate secondary particles, and no hard geometry classification switch.
+ let coverage=1.-smoothstep(.18,.70,rho);
  if(settings.x!=0u){
   if(i==0u){atomicStore(&draw[0],6u);}
-  if(rho<.18&&nearby<=4.){kind=1.;}
-  if(nearby>=3.&&rho<2.4){
-   var n=cross(cov[0],cov[1]);let n1=cross(cov[1],cov[2]);let n2=cross(cov[2],cov[0]);
-   if(dot(n1,n1)>dot(n,n)){n=n1;}if(dot(n2,n2)>dot(n,n)){n=n2;}
-   let square=dot(cov[0],cov[0])+dot(cov[1],cov[1])+dot(cov[2],cov[2]);
-   let spread=(tr*tr-square)*.5/(tr*tr);
-   if(dot(n,n)>1e-22){n=normalize(n);if(dot(n,cov*n)/tr<.025&&spread>.14){kind=2.;sheetNormal=n;}}
+  if(coverage>.001){
+   let radius=.72*h()*pow(.1/REST,1./3.);
+   let metric=IDENTITY*(1./(radius*radius));let slot=atomicAdd(&draw[1],1u);
+   details[slot]=Detail(vec4f(p,1.),vec4f(metric[0],radius),vec4f(metric[1],f32(i)),vec4f(metric[2],coverage));
   }
- }
- if(kind>0.){
-  let radius=h()*pow(.1/REST,1./3.);var metric=IDENTITY*(1./(radius*radius));var boundRadius=radius;
-  if(kind>1.5){
-   let tangent=h()*.78;let thin=radius*radius*radius/(tangent*tangent);let outer=mat3x3f(sheetNormal*sheetNormal.x,sheetNormal*sheetNormal.y,sheetNormal*sheetNormal.z);
-   metric=IDENTITY*(1./(tangent*tangent))+outer*(1./(thin*thin)-1./(tangent*tangent));boundRadius=tangent;
-  }
-  let slot=atomicAdd(&draw[1],1u);
-  details[slot]=Detail(vec4f(p,kind),vec4f(metric[0],boundRadius),vec4f(metric[1],f32(i)),vec4f(metric[2],particleMass()));
  }
  cov+=IDENTITY*(tr*.18+1e-7);
  cov=cov*(1./pow(max(determinant3(cov),1e-24),1./3.));
  let confidence=smoothstep(5.,14.,nearby)*smoothstep(.35,1.5,rho);
  cov=IDENTITY*(1.-confidence)+cov*confidence;cov=cov*(1./pow(max(determinant3(cov),1e-8),1./3.));
  let metric=inverse3(cov);let centre=p+limited(mean*.55*confidence,.025*P.clock.z);
- shapes[i]=Shape(vec4f(centre,rho),vec4f(metric[0],sqrt(cov[0][0])),vec4f(metric[1],sqrt(cov[1][1])),vec4f(metric[2],select(sqrt(cov[2][2]),-kind,kind>0.)));
- if(kind==0.){atomicMax(&bounds[0],bitcast<u32>(p.y+2.));}
+ shapes[i]=Shape(vec4f(centre,rho),vec4f(metric[0],1.),vec4f(metric[1],sqrt(cov[1][1])),vec4f(metric[2],sqrt(cov[2][2])));
+ atomicMax(&bounds[0],bitcast<u32>(p.y+2.));
  }`,
   density:
     common +
@@ -83,11 +75,12 @@ export const volumeShaders: Record<string, string> = {
   let x1=clamp(i32(floor((p.x+extent+2.04)/cellSize)),0,31);
   let row=32*(y+40*z);let begin=starts[u32(row+x0)];let end=starts[u32(row+x1+1)];
   for(var j=begin;j<end;j++){
-   if(shapes[j].m2.w<0.){continue;}
-   let centre=shapes[j].center;let radius=max(.095,mix(.1,.19,smoothstep(.15,1.2,centre.w))*P.clock.z);
+   // Scale the entire kernel with particle resolution. A world-space .095
+   // floor made sparse particles swell as quality increased (especially 50k).
+   let centre=shapes[j].center;let radius=mix(.1,.19,smoothstep(.15,1.2,centre.w))*P.clock.z;
    let diff=(p-centre.xyz)/radius;if(dot(diff,diff)>3.51){continue;}
    let metric=mat3x3f(shapes[j].m0.xyz,shapes[j].m1.xyz,shapes[j].m2.xyz);
-   let r2=dot(diff,metric*diff);if(r2<1.){let q=1.-r2;value+=q*q*q*(1.+max(0.,1.-centre.w)*.8);}
+   let r2=dot(diff,metric*diff);if(r2<1.){let q=1.-r2;value+=shapes[j].m0.w*q*q*q*(1.+max(0.,1.-centre.w)*.8);}
   }
  }}
  field[index]=value;

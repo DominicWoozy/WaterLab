@@ -7,7 +7,7 @@ struct Particle { pos: vec4f, old: vec4f, vel: vec4f }
 struct Params {
   counts: vec4u, // count, quality, previousCount, reset reaction
   clock: vec4f, // dt, time, particleScale, gravity
-  forces: vec4f, // viscosity, agitation, shake, unused
+  forces: vec4f, // viscosity, agitation, shake, surface tension mode
   brush: vec4f,
   motion: vec4f, // brush vx/vz, pour x/z
   splash: vec4f,

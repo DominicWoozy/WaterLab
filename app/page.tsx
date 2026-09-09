@@ -269,6 +269,19 @@ export default function Home() {
                 suffix="m/s²"
                 onChange={(v) => update('gravity', v)}
               />
+              <div className="toggle-row">
+                <label htmlFor="surface-tension">
+                  表面张力<small>水滴聚合与水面回缩</small>
+                </label>
+                <Switch
+                  id="surface-tension"
+                  checked={
+                    settings.surfaceTension && stats.backend === 'WebGPU'
+                  }
+                  disabled={stats.backend !== 'WebGPU'}
+                  onCheckedChange={(v) => update('surfaceTension', v)}
+                />
+              </div>
               <Range
                 label="时间速度"
                 value={settings.speed}
@@ -366,7 +379,7 @@ export default function Home() {
               />
               <div className="toggle-row">
                 <label htmlFor="details">
-                  精细水滴与薄片<small>局部重建实验 · 关闭可对比原效果</small>
+                  精细水滴<small>缩小孤立水滴的显示体积，不改变物理水量</small>
                 </label>
                 <Switch
                   id="details"

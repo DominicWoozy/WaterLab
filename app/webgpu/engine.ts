@@ -53,6 +53,7 @@ export async function createWebGPUWater(
     dirty = true,
     needsReset = true,
     inFlight = 0;
+  let resizePending = true;
   let requestedQuality: WebGPUQuality = 50000,
     pourAt = [-0.7, 0],
     splash = [0, 0, 0];
@@ -95,8 +96,12 @@ export async function createWebGPUWater(
       canvas.height = h;
     }
   };
-  resize();
-  const observer = new ResizeObserver(resize);
+  // Changing canvas.width/height clears the presented image. Queue all size
+  // changes until the start of a frame that will actually submit a new image.
+  // In particular, never resize after queue.submit in the FPS feedback block.
+  const observer = new ResizeObserver(() => {
+    resizePending = true;
+  });
   observer.observe(canvas);
   let pointer: {
     id: number;
@@ -142,6 +147,10 @@ export async function createWebGPUWater(
     if (inFlight >= 2 || document.hidden) {
       lastUpdate = now;
       return;
+    }
+    if (resizePending) {
+      resize();
+      resizePending = false;
     }
     const s = getSettings();
     const elapsed = lastUpdate
@@ -202,6 +211,7 @@ export async function createWebGPUWater(
           encoder,
           {
             previousCount,
+            surfaceTension: s.surfaceTension,
             forces: {
               gravity: s.gravity,
               agitation: s.agitation,
@@ -282,7 +292,7 @@ export async function createWebGPUWater(
               : renderScale;
         if (Math.abs(next - renderScale) > 0.015) {
           renderScale = next;
-          resize();
+          resizePending = true;
         }
         frames = 0;
         statTime = now;

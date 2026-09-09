@@ -38,6 +38,7 @@ export function registerWaterTools(
           agitation: { type: 'number', minimum: 0, maximum: 1.4 },
           particles: { type: 'boolean' },
           details: { type: 'boolean' },
+          surfaceTension: { type: 'boolean' },
           light: { type: 'number', minimum: 0.2, maximum: 2.5 },
           reflection: { type: 'boolean' },
           caustics: { type: 'boolean' },
@@ -75,6 +76,7 @@ export function registerWaterTools(
               'paused',
               'particles',
               'details',
+              'surfaceTension',
             ].includes(key)
           ) {
             if (typeof value !== 'boolean')
