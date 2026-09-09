@@ -1,6 +1,7 @@
 import { buffer } from './compute.ts';
 import { renderShader, particlesShader } from './render-shaders.ts';
 import { detailShader } from './detail-shaders.ts';
+import { WebGPUCaustics } from './caustics.ts';
 import type { WebGPUSimulation } from './simulation.ts';
 import type { WebGPUVolume } from './volume.ts';
 export type Camera = {
@@ -11,6 +12,7 @@ export type Camera = {
 };
 export class WebGPURenderer {
   readonly uniform: GPUBuffer;
+  private caustics!: WebGPUCaustics;
   private surface!: GPURenderPipeline;
   private particles!: GPURenderPipeline;
   private detailPipeline!: GPURenderPipeline;
@@ -97,6 +99,8 @@ export class WebGPURenderer {
           texture: { sampleType: 'unfilterable-float' as const },
         })),
         { binding: 11, visibility: F, buffer: { type: 'read-only-storage' } },
+        { binding: 12, visibility: F, texture: { sampleType: 'float' } },
+        { binding: 13, visibility: F, sampler: { type: 'filtering' } },
       ],
     });
     this.particleLayout = device.createBindGroupLayout({
@@ -121,6 +125,7 @@ export class WebGPURenderer {
   static async create(device: GPUDevice, format: GPUTextureFormat) {
     const r = new WebGPURenderer(device, format);
     try {
+      r.caustics = await WebGPUCaustics.create(device, r.uniform);
       for (const [name, code, layout, compare] of [
         [
           'surface',
@@ -216,6 +221,7 @@ export class WebGPURenderer {
       );
     }
     this.surfaceGroups.clear();
+    this.caustics.clearCache();
     this.ready = true;
   }
   ready = false;
@@ -291,6 +297,16 @@ export class WebGPURenderer {
     u.set(options.brush ?? [0, -0.25, 0, 0], 24);
     u.set([1.15, +this.ready, 0.021, Math.cbrt(10000 / sim.quality)], 28);
     this.device.queue.writeBuffer(this.uniform, 0, u);
+    if (options.caustics && !options.particles && options.light > 0)
+      this.caustics.encode(
+        encoder,
+        volume,
+        this.densitySampler,
+        sim.duck,
+        this.bvh,
+        this.triangles,
+        sim.count,
+      );
     if (volume.detailsEnabled && !options.particles) {
       this.detailGroup ??= this.device.createBindGroup({
         layout: this.detailLayout,
@@ -338,6 +354,8 @@ export class WebGPURenderer {
           { binding: 9, resource: this.detailHits!.createView() },
           { binding: 10, resource: this.detailNormals!.createView() },
           { binding: 11, resource: { buffer: volume.details } },
+          { binding: 12, resource: this.caustics.view },
+          { binding: 13, resource: this.albedoSampler },
         ],
       });
       this.surfaceGroups.set(sim.duck, surface);
@@ -381,6 +399,7 @@ export class WebGPURenderer {
     pass.end();
   }
   destroy() {
+    this.caustics?.destroy();
     this.uniform.destroy();
     this.bvh.destroy();
     this.triangles.destroy();

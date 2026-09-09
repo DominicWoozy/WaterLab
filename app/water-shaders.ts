@@ -93,6 +93,16 @@ vec3 sky(vec3 r){
  return c;
 }
 ${duckRender}
+// Receiver-space approximation. Keep it on wet pool tiles so transmission,
+// absorption, Fresnel reflection and foreground duck occlusion apply normally.
+vec3 floorCaustic(vec3 p){
+ if(causticsOn<.5||lightPower<=0.||particleView>.5)return vec3(0.);
+ float wet=smoothstep(isoDensity-.18,isoDensity+.18,density(p+vec3(0.,.07,0.)));
+ if(wet<=0.)return vec3(0.);
+ vec2 q=p.xz*10.;
+ float pattern=pow(max(0.,1.-abs(sin(q.x+sin(q.y+time*.4))+sin(q.y+sin(q.x-time*.3)))*.7),15.);
+ return vec3(.16,.18,.16)*pattern*lightPower*wet;
+}
 vec3 room(vec3 ro,vec3 rd){
  vec3 c=vec3(.045,.067,.080);
  float t=(-1.075-ro.y)/rd.y;
@@ -109,7 +119,7 @@ vec3 room(vec3 ro,vec3 rd){
  if(floorT>0.){
   vec3 p=ro+rd*floorT;
   if(abs(p.x)<1.92&&abs(p.z)<1.42){
-   c=tiles(p.xz)*(.43+lightPower*.28);
+   c=tiles(p.xz)*(vec3(.43+lightPower*.28)+floorCaustic(p));
    float rim=max(abs(p.x)/1.92,abs(p.z)/1.42);
    if(rim>.973)c=vec3(.24,.35,.37);
   }
@@ -167,10 +177,6 @@ void main(){
   color=mix(transmission,reflection,fresnel*reflectionOn);
   vec3 sun=normalize(vec3(-.6,1.,.35));
   color+=vec3(1.,.97,.9)*pow(max(dot(reflect(rd,n),sun),0.),240.)*lightPower*reflectionOn;
-  // Weak caustic accents cannot override absorption or tint thin water opaque.
-  vec2 q=p.xz*10.+n.xz*1.7;
-  float caustic=pow(max(0.,1.-abs(sin(q.x+sin(q.y+time*.4))+sin(q.y+sin(q.x-time*.3)))*.7),15.);
-  color+=vec3(.12,.15,.14)*caustic*causticsOn*lightPower*min(thickness,.7)*absorb;
  }
  if(brushOn>.5){
   float t=(brush.y-eye.y)/rd.y;

@@ -1,5 +1,5 @@
 import { detailCommon } from './detail-shaders.ts';
-export function renderShader(filterable: boolean) {
+export function renderScene(filterable: boolean) {
   return (
     detailCommon +
     /* wgsl */ `
@@ -87,11 +87,29 @@ fn opticalPath(p:vec3f,r:vec3f)->f32 {
  let hit=boxHit(p,r);let end=duckTrace(p,r,max(0.,hit.y)).x;let stepSize=end/72.;var result=0.;
  for(var i=0;i<72;i++){let d=density(p+r*(f32(i)+.5)*stepSize);result+=smoothstep(S.config.x-.18,S.config.x+.18,d)*stepSize;}return result;
 }
+`
+  );
+}
+export function renderShader(filterable: boolean) {
+  return (
+    renderScene(filterable) +
+    /* wgsl */ `
+@group(0) @binding(12) var causticMap:texture_2d<f32>;
+@group(0) @binding(13) var causticSampler:sampler;
 fn tiles(p:vec2f)->vec3f {let g=abs(fract(p*3.)-.5);let seam=smoothstep(.472,.499,max(g.x,g.y));let c=(floor(p.x*3.)+floor(p.y*3.))-2.*floor((floor(p.x*3.)+floor(p.y*3.))/2.);return mix(mix(vec3f(.65,.68,.66),vec3f(.76,.78,.74),c),vec3f(.12,.24,.26),seam*.75);}
+// Light-space irradiance, deposited on the floor before camera transmission.
+fn floorLighting(p:vec3f)->vec3f {
+ let direct=vec3f(S.light.x*.28);
+ if(S.light.z<.5||S.light.x<=0.||S.light.w>.5){return direct;}
+ let wet=smoothstep(S.config.x-.18,S.config.x+.18,density(p+vec3f(0.,.07,0.)));
+ let uv=p.xz/vec2f(3.84,2.84)+.5;
+ let irradiance=textureSampleLevel(causticMap,causticSampler,uv,0.).rgb;
+ return direct*mix(vec3f(1.),irradiance,wet);
+}
 fn room(ro:vec3f,rd:vec3f)->vec3f {
  var c=vec3f(.045,.067,.080);let t=(-1.075-ro.y)/rd.y;
  if(t>0.){let p=ro+rd*t;let d=length(p.xz);c+=vec3f(.018,.026,.028)*exp(-d*.15);let grid=abs(fract(p.xz*.5+.5)-.5);c+=smoothstep(.496,.5,max(grid.x,grid.y))*.014*exp(-d*.18);let shadow=exp(-max(abs(p.x)-1.7,0.)*3.-max(abs(p.z)-1.2,0.)*3.);c*=1.-shadow*.55;}
- let floorT=(-.97-ro.y)/rd.y;if(floorT>0.){let p=ro+rd*floorT;if(abs(p.x)<1.92&&abs(p.z)<1.42){c=tiles(p.xz)*(.43+S.light.x*.28);let rim=max(abs(p.x)/1.92,abs(p.z)/1.42);if(rim>.973){c=vec3f(.24,.35,.37);}}}
+ let floorT=(-.97-ro.y)/rd.y;if(floorT>0.){let p=ro+rd*floorT;if(abs(p.x)<1.92&&abs(p.z)<1.42){c=tiles(p.xz)*(vec3f(.43)+floorLighting(p));let rim=max(abs(p.x)/1.92,abs(p.z)/1.42);if(rim>.973){c=vec3f(.24,.35,.37);}}}
  for(var side=0;side<4;side++){
  let axis=select(rd.z,rd.x,side<2);let origin=select(ro.z,ro.x,side<2);let extent=select(1.38,1.88,side<2);let at=select(extent,-extent,side==0||side==2);let hit=(at-origin)/axis;
  if(hit>0.){let p=ro+rd*hit;let lateral=select(abs(p.x),abs(p.z),side<2);let limit=select(1.88,1.38,side<2);
@@ -112,7 +130,6 @@ fn waterColor(p:vec3f,n:vec3f,rd:vec3f,detailId:u32)->vec3f {
   var transmission=scene(samplePoint,exitRay)*absorb;transmission+=vec3f(.012,.11,.13)*(1.-absorb)*S.light.x*.45;var color=transmission;
   if(S.light.y>.5){let fresnel=.0204+.9796*pow(1.-max(dot(-rd,n),0.),5.);let reflected=reflect(rd,n);let mirrorDuck=duckTrace(p+reflected*.006,reflected,1e5);var reflection=sky(reflected);if(mirrorDuck.y>=0.){reflection=duckShade(mirrorDuck,reflected);}color=mix(transmission,reflection,fresnel);
   let sun=normalize(vec3f(-.6,1.,.35));color+=vec3f(1.,.97,.9)*pow(max(dot(reflect(rd,n),sun),0.),240.)*S.light.x;}
-  if(S.light.z>.5){let q=p.xz*10.+n.xz*1.7;let caustic=pow(max(0.,1.-abs(sin(q.x+sin(q.y+S.view.w*.4))+sin(q.y+sin(q.x-S.view.w*.3)))*.7),15.);color+=vec3f(.12,.15,.14)*caustic*S.light.x*min(thickness,.7)*absorb;}
  return color;
 }
 struct FragmentOut {@location(0) color:vec4f,@builtin(frag_depth) depth:f32}
