@@ -400,10 +400,10 @@ export default function Home() {
               </div>
               <div className="toggle-row">
                 <label htmlFor="caustics">
-                  水底光纹
+                  折射焦散
                   <small>
                     {stats.backend === 'WebGPU'
-                      ? '随水面折射聚光'
+                      ? '地面与鸭子折射聚光'
                       : '动态焦散近似'}
                   </small>
                 </label>

@@ -101,6 +101,7 @@ export class WebGPURenderer {
         { binding: 11, visibility: F, buffer: { type: 'read-only-storage' } },
         { binding: 12, visibility: F, texture: { sampleType: 'float' } },
         { binding: 13, visibility: F, sampler: { type: 'filtering' } },
+        { binding: 14, visibility: F, buffer: { type: 'read-only-storage' } },
       ],
     });
     this.particleLayout = device.createBindGroupLayout({
@@ -221,7 +222,7 @@ export class WebGPURenderer {
       );
     }
     this.surfaceGroups.clear();
-    this.caustics.clearCache();
+    this.caustics.setModel(this.triangles);
     this.ready = true;
   }
   ready = false;
@@ -297,7 +298,7 @@ export class WebGPURenderer {
     u.set(options.brush ?? [0, -0.25, 0, 0], 24);
     u.set([1.15, +this.ready, 0.021, Math.cbrt(10000 / sim.quality)], 28);
     this.device.queue.writeBuffer(this.uniform, 0, u);
-    if (options.caustics && !options.particles && options.light > 0)
+    if (!options.particles && options.light > 0)
       this.caustics.encode(
         encoder,
         volume,
@@ -356,6 +357,7 @@ export class WebGPURenderer {
           { binding: 11, resource: { buffer: volume.details } },
           { binding: 12, resource: this.caustics.view },
           { binding: 13, resource: this.albedoSampler },
+          { binding: 14, resource: { buffer: this.caustics.duckLighting } },
         ],
       });
       this.surfaceGroups.set(sim.duck, surface);

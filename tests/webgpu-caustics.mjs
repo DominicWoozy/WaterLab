@@ -115,7 +115,13 @@ function fill(wet) {
 }
 async function probe(
   on,
-  { light = 1.3, reflection = true, time = 1.7, particles = false } = {},
+  {
+    light = 1.3,
+    reflection = true,
+    time = 1.7,
+    particles = false,
+    duckLight = 0,
+  } = {},
 ) {
   const u = new Float32Array(32);
   u.set([64, 8, 0, time], 16);
@@ -128,6 +134,22 @@ async function probe(
     usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
   });
   encoder = device.createCommandEncoder();
+  device.queue.writeBuffer(
+    renderer.caustics.duckLighting,
+    0,
+    new Float32Array(renderer.caustics.duckLighting.size / 4).fill(duckLight),
+  );
+  const lighting = encoder.beginRenderPass({
+    colorAttachments: [
+      {
+        view: renderer.caustics.view,
+        loadOp: 'clear',
+        storeOp: 'store',
+        clearValue: [on ? 2 : 1, on ? 2 : 1, on ? 2 : 1, 1],
+      },
+    ],
+  });
+  lighting.end();
   const pass = encoder.beginRenderPass({
     colorAttachments: [
       { view: target.createView(), loadOp: 'clear', storeOp: 'store' },
@@ -182,8 +204,8 @@ assert.ok(
   'foreground duck must not receive a screen overlay',
 );
 assert.ok(
-  Math.max(...rowDiff(on, off, 6).map(Math.abs)) < 1e-7,
-  'water ray missing the pool floor must not glow',
+  Math.max(...rowDiff(on, off, 6).map(Math.abs)) > 1e-4,
+  'water ray outside the pool can transmit light from the actual ground',
 );
 // Use x<-.45 to keep these vertical water rays clear of the duck hull.
 for (let x = 0; x < 12; x++)
@@ -207,13 +229,22 @@ for (const setting of [{ light: 0 }, { particles: true }]) {
   assert.deepEqual(a, b, 'disabled lighting/debug must suppress caustics');
 }
 fill(false);
-assert.deepEqual(
-  await probe(true),
-  await probe(false),
-  'dry pool must not retain a caustic pattern',
+assert.ok(
+  Math.max(...rowDiff(await probe(true), await probe(false), 0)) > 0.04,
+  'dry receivers still show projected irradiance',
+);
+const litDuck = await probe(true, { duckLight: 1 });
+const darkDuck = await probe(true, { duckLight: 0 });
+assert.ok(
+  Math.max(...rowDiff(litDuck, darkDuck, 5)) > 0.05,
+  'duck uses its own surface irradiance map',
+);
+assert.ok(
+  Math.max(...rowDiff(litDuck, darkDuck, 0).map(Math.abs)) < 1e-7,
+  'duck lighting does not overlay the ground',
 );
 assert.deepEqual(errors, []);
 console.log(
-  `PASS (${filtered ? 'filtered' : 'manual trilinear'}): floor coordinates, dry mask, occlusion, no surface emission, absorption/Fresnel, toggles and pause`,
+  `PASS (${filtered ? 'filtered' : 'manual trilinear'}): receiver coordinates, dry ground, duck surface light, occlusion, no surface emission, absorption/Fresnel, toggles and pause`,
 );
 process.exit(0);

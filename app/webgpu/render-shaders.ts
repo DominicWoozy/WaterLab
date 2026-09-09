@@ -1,3 +1,4 @@
+import { receiverScene } from './light-space.ts';
 import { detailCommon } from './detail-shaders.ts';
 export function renderScene(filterable: boolean) {
   return (
@@ -17,6 +18,7 @@ struct Duck {pos:vec4f,rotation:vec4f,vel:vec4f,omega:vec4f}
 @group(0) @binding(9) var detailHits:texture_2d<f32>;
 @group(0) @binding(10) var detailNormals:texture_2d<f32>;
 @group(0) @binding(11) var<storage,read> details:array<Detail>;
+@group(0) @binding(14) var<storage,read> duckIrradiance:array<vec4f>;
 const VMIN=vec3f(-2.08,-1.12,-1.56);const VMAX=vec3f(2.08,4.08,1.56);const VSIZE=vec3f(128.,160.,96.);
 var<private> volumeTop:f32;
 struct VertexOut {@builtin(position) position:vec4f,@location(0) uv:vec2f}
@@ -81,7 +83,9 @@ fn duckShade(hit:vec4f,rd:vec3f)->vec3f {
  let uv=vec2f(dot(vec3f(triangles[tri].w,triangles[tri+1u].w,triangles[tri+2u].w),w),dot(vec3f(n0.w,n1.w,n2.w),w));
  let color=pow(textureSampleLevel(albedo,albedoSampler,uv,0.).rgb,vec3f(2.2));let sun=normalize(vec3f(-.6,1.,.35));let halfway=normalize(sun-rd);
  let diffuse=max(0.,dot(n,sun));let spec=pow(max(0.,dot(n,halfway)),85.);let facing=pow(1.-max(0.,dot(n,-rd)),5.);
- return color*(.34+diffuse*.85*S.light.x)+vec3f(1.,.96,.82)*spec*S.light.x*.6+sky(reflect(rd,n))*(.025+.16*facing);
+ var illumination=vec3f(diffuse);if(S.light.w<.5&&S.light.x>0.){illumination=(duckIrradiance[u32(hit.y)*3u]*w.x+duckIrradiance[u32(hit.y)*3u+1u]*w.y+duckIrradiance[u32(hit.y)*3u+2u]*w.z).rgb;}
+ let visibility=clamp(max(illumination.r,max(illumination.g,illumination.b))/max(diffuse,.05),0.,1.);
+ return color*(vec3f(.34)+illumination*.85*S.light.x)+vec3f(1.,.96,.82)*spec*S.light.x*.6*visibility+sky(reflect(rd,n))*(.025+.16*facing);
 }
 fn opticalPath(p:vec3f,r:vec3f)->f32 {
  let hit=boxHit(p,r);let end=duckTrace(p,r,max(0.,hit.y)).x;let stepSize=end/72.;var result=0.;
@@ -93,6 +97,7 @@ fn opticalPath(p:vec3f,r:vec3f)->f32 {
 export function renderShader(filterable: boolean) {
   return (
     renderScene(filterable) +
+    receiverScene +
     /* wgsl */ `
 @group(0) @binding(12) var causticMap:texture_2d<f32>;
 @group(0) @binding(13) var causticSampler:sampler;
@@ -100,15 +105,15 @@ fn tiles(p:vec2f)->vec3f {let g=abs(fract(p*3.)-.5);let seam=smoothstep(.472,.49
 // Light-space irradiance, deposited on the floor before camera transmission.
 fn floorLighting(p:vec3f)->vec3f {
  let direct=vec3f(S.light.x*.28);
- if(S.light.z<.5||S.light.x<=0.||S.light.w>.5){return direct;}
- let wet=smoothstep(S.config.x-.18,S.config.x+.18,density(p+vec3f(0.,.07,0.)));
- let uv=p.xz/vec2f(3.84,2.84)+.5;
+ if(S.light.x<=0.||S.light.w>.5){return direct;}
+ let uv=p.xz/RECEIVER_SIZE+.5;
+ if(any(uv<vec2f(0.))||any(uv>vec2f(1.))){return direct;}
  let irradiance=textureSampleLevel(causticMap,causticSampler,uv,0.).rgb;
- return direct*mix(vec3f(1.),irradiance,wet);
+ return direct*irradiance;
 }
 fn room(ro:vec3f,rd:vec3f)->vec3f {
  var c=vec3f(.045,.067,.080);let t=(-1.075-ro.y)/rd.y;
- if(t>0.){let p=ro+rd*t;let d=length(p.xz);c+=vec3f(.018,.026,.028)*exp(-d*.15);let grid=abs(fract(p.xz*.5+.5)-.5);c+=smoothstep(.496,.5,max(grid.x,grid.y))*.014*exp(-d*.18);let shadow=exp(-max(abs(p.x)-1.7,0.)*3.-max(abs(p.z)-1.2,0.)*3.);c*=1.-shadow*.55;}
+ if(t>0.){let p=ro+rd*t;let d=length(p.xz);c+=vec3f(.018,.026,.028)*exp(-d*.15);let grid=abs(fract(p.xz*.5+.5)-.5);c+=smoothstep(.496,.5,max(grid.x,grid.y))*.014*exp(-d*.18);c*=(vec3f(.43)+floorLighting(p))/(.43+.28*S.light.x);}
  let floorT=(-.97-ro.y)/rd.y;if(floorT>0.){let p=ro+rd*floorT;if(abs(p.x)<1.92&&abs(p.z)<1.42){c=tiles(p.xz)*(vec3f(.43)+floorLighting(p));let rim=max(abs(p.x)/1.92,abs(p.z)/1.42);if(rim>.973){c=vec3f(.24,.35,.37);}}}
  for(var side=0;side<4;side++){
  let axis=select(rd.z,rd.x,side<2);let origin=select(ro.z,ro.x,side<2);let extent=select(1.38,1.88,side<2);let at=select(extent,-extent,side==0||side==2);let hit=(at-origin)/axis;
