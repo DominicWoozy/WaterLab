@@ -1,6 +1,12 @@
 export const CAPACITY = 50000;
 export const GRID_CELLS = 32 * 40 * 24;
 export const WORKGROUP = 128;
+export const NEIGHBOR_CACHE_SIZE = 96;
+export const NEIGHBOR_CACHE_BASE = GRID_CELLS + 1;
+// Store the optional cache behind cell offsets in the same storage binding.
+// A full cache falls back to complete cell traversal; it never truncates physics.
+export const GRID_STORAGE_WORDS =
+  NEIGHBOR_CACHE_BASE + CAPACITY * (NEIGHBOR_CACHE_SIZE + 1);
 
 export const common = /* wgsl */ `
 struct Particle { pos: vec4f, old: vec4f, vel: vec4f }
@@ -58,7 +64,7 @@ fn inverseInertia(t:vec3f,q:vec4f)->vec3f {return qrotate(q,qrotate(conjugate(q)
 `;
 
 // A complete range per cell, with no fixed bucket/neighbor capacity. Adjacent X
-// cells form one contiguous interval. Rebuild after the second pressure correction;
+// cells form one contiguous interval. Rebuild after each pair of pressure corrections;
 // at each neighbor query, at most one .042*scale pressure/contact shift is outstanding.
 export function neighbors(body: string) {
   return /* wgsl */ `
@@ -75,5 +81,31 @@ export function neighbors(body: string) {
    }
   }
  }
+ `;
+}
+
+export function cachedNeighbors(body: string) {
+  return /* wgsl */ `
+ let cachedCount=starts[${NEIGHBOR_CACHE_BASE}u+i];
+ if(cachedCount<=${NEIGHBOR_CACHE_SIZE}u){
+  for(var entry=0u;entry<cachedCount;entry++){
+   let j=starts[${NEIGHBOR_CACHE_BASE + CAPACITY}u+entry*${CAPACITY}u+i];
+   let diff=p-input[j].pos.xyz;let r2=dot(diff,diff);
+   if(r2>=h()*h()||r2<1e-12){continue;}
+   let r=sqrt(r2);let q=1.-r/h();let gradient=(2.*q/(h()*REST*r))*diff;
+   ${body}
+  }
+ }else{
+  ${neighbors(body)}
+ }
+ `;
+}
+
+// Record every count even when the index cache fills, so readers can fall back
+// to complete grid traversal. The caller owns `count` and the current i/j pair.
+export function recordNeighbor() {
+  return /* wgsl */ `
+ if(count<${NEIGHBOR_CACHE_SIZE}u){starts[${NEIGHBOR_CACHE_BASE + CAPACITY}u+count*${CAPACITY}u+i]=j;}
+ count++;
  `;
 }

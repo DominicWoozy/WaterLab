@@ -1,4 +1,10 @@
-import { common, neighbors } from './common.ts';
+import {
+  common,
+  NEIGHBOR_CACHE_BASE,
+  recordNeighbor,
+  cachedNeighbors as neighbors,
+  neighbors as gridNeighbors,
+} from './common.ts';
 import { tensionCommon } from './surface-tension-shaders.ts';
 const bindings = /* wgsl */ `
 struct Reaction { linear:vec4f, angular:vec4f }
@@ -11,10 +17,15 @@ struct Reaction { linear:vec4f, angular:vec4f }
 @group(0) @binding(7) var<storage,read_write> reactions:array<Reaction>;
 @group(0) @binding(8) var<storage,read_write> surface:array<vec4f>;
 `;
-const kernel = (body: string) =>
+const kernel = (body: string, writeNeighborCache = false) =>
   common +
   tensionCommon +
-  bindings +
+  (writeNeighborCache
+    ? bindings.replace(
+        '@binding(3) var<storage,read>',
+        '@binding(3) var<storage,read_write>',
+      )
+    : bindings) +
   /* wgsl */ `
 @compute @workgroup_size(128) fn main(@builtin(global_invocation_id) gid:vec3u){
  let i=gid.x;if(i>=P.counts.x){return;}${body}
@@ -43,12 +54,21 @@ export const fluidShaders: Record<string, string> = {
  let sd=p.xz-P.splash.xy;let sw=exp(-dot(sd,sd)/.18)*P.splash.z;
  v+=vec3f(sd.x*2.,1.6,sd.y*2.)*sw;a.pos=vec4f(bound(p+limited(v,12.)*dt),a.pos.w);output[i]=a;
  }`,
-  lambda: kernel(/* wgsl */ `
+  lambda: kernel(
+    /* wgsl */ `
  let p=input[i].pos.xyz;let wall=wallSupport(p)+duckSupport(p,duck);
- var rho=wall.w;var sum=0.;var grad=wall.xyz;
- ${neighbors('rho+=q*q;grad+=gradient;sum+=dot(gradient,gradient);')}
- auxOut[i]=vec4f(-max(rho/REST-1.,0.)/(sum+dot(grad,grad)+2.),rho,0.,0.);
- `),
+ var rho=wall.w;var sum=0.;var grad=wall.xyz;var count=0u;
+ // The following correction reads these same positions. Cache while gathering
+ // pressure, then rebuild at the next lambda pass after positions have changed.
+ ${gridNeighbors(`rho+=q*q;grad+=gradient;sum+=dot(gradient,gradient);${recordNeighbor()}`)}
+ starts[${NEIGHBOR_CACHE_BASE}u+i]=count;
+ // Neighbor constraints update simultaneously. Full Jacobi corrections overshoot
+ // in the dense bulk and become velocity impulses on the next pass. Relax the
+ // constraint multiplier (including boundary reactions), not the fluid velocity.
+ auxOut[i]=vec4f(-.25*max(rho/REST-1.,0.)/(sum+dot(grad,grad)+2.),rho,0.,0.);
+ `,
+    true,
+  ),
   correct: kernel(/* wgsl */ `
  let p=input[i].pos.xyz;let pressure=aux[i].x;var delta=-pressure*wallSupport(p).xyz;
  ${neighbors('delta-=(pressure+aux[j].x)*gradient;')}
@@ -62,7 +82,7 @@ export const fluidShaders: Record<string, string> = {
  `),
   velocity: kernel(/* wgsl */ `
  var a=input[i];var v=(a.pos.xyz-a.old.xyz)/P.clock.x;if(a.old.w<.5){v=vec3f(0.,-1.4,0.);}
- a.vel=vec4f(limited(v,12.)*.998,a.vel.w);output[i]=a;
+ a.vel=vec4f(limited(v,12.)*pow(.998,P.clock.x*60.),a.vel.w);output[i]=a;
  `),
   viscosity: kernel(/* wgsl */ `
  let p=input[i].pos.xyz;let v=input[i].vel.xyz;var delta=vec3f(0.);var capillary=vec3f(0.);
@@ -74,11 +94,12 @@ export const fluidShaders: Record<string, string> = {
   let damping=min(2.*sqrt(abs(f)/max(r,.15*h())),.25/(P.clock.x*max(1.,max(aux[i].z,aux[j].z))));
   capillary+=n*(damping*dot(input[j].vel.xyz-v,n)-select(0.,f,P.forces.w==1.));
  }`)}
- var a=input[i];a.vel=vec4f(limited(v+delta*(.002+P.forces.x*.065)+capillary*P.clock.x,12.),a.vel.w);output[i]=a;
+ // Preserve the viscosity rate per simulated second when substepping.
+ var a=input[i];a.vel=vec4f(limited(v+delta*(.002+P.forces.x*.065)*(P.clock.x*60.)+capillary*P.clock.x,12.),a.vel.w);output[i]=a;
  `),
   factor: kernel(/* wgsl */ `
  let p=input[i].pos.xyz;let wall=wallSupport(p)+duckSupport(p,duck);var rho=wall.w;var sum=0.;var nearby=0.;var grad=wall.xyz;
- ${neighbors('rho+=q*q;grad+=gradient;sum+=dot(gradient,gradient);nearby+=1.;')}
+ ${gridNeighbors('rho+=q*q;grad+=gradient;sum+=dot(gradient,gradient);nearby+=1.;')}
  // Include boundary support in normals, but add no wall attraction.
  surface[i]=vec4f(limited(-h()*grad,2.),(rho+1.)/REST);
  var f=0.;if(nearby>=12.&&rho>REST*.4){f=1./max(sum+dot(grad,grad),1e-6);}
@@ -95,7 +116,7 @@ export const fluidShaders: Record<string, string> = {
  ${neighbors('delta+=(pressure+aux[j].x)*gradient;')}
  let boundaryDelta=.5*pressure*duckSupport(p,duck).xyz;let before=v+.5*delta;v=before+boundaryDelta;
  let hull=duckHull(p,duck);if(hull.w<.018){let relative=v-duckVelocity(p,duck);let normalPart=dot(relative,hull.xyz)*hull.xyz;
- v-=min(dot(relative,hull.xyz),0.)*hull.xyz;v-=(relative-normalPart)*.025*(1.-smoothstep(.004,.018,hull.w));}
+ v-=min(dot(relative,hull.xyz),0.)*hull.xyz;v-=(relative-normalPart)*(1.-pow(.975,P.clock.x*60.))*(1.-smoothstep(.004,.018,hull.w));}
  let limiter=min(1.,12./max(length(v),1e-8));let impulse=-(v-before)*limiter*particleMass();
  reactions[i].linear+=vec4f(impulse,0.);reactions[i].angular+=vec4f(cross(p-duck.pos.xyz,impulse),0.);
  v*=limiter;

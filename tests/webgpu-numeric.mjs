@@ -8,7 +8,7 @@ globalThis.nativeGPU = gpu;
 const adapter = await gpu.requestAdapter();
 const device = await adapter.requestDevice();
 let lost;
-device.lost.then((info) => {
+void device.lost.then((info) => {
   lost = info;
 });
 const errors = [];
@@ -34,7 +34,7 @@ const volume = await WebGPUVolume.create(device);
 let e = device.createCommandEncoder();
 sim.reset(e, 50000);
 device.queue.submit([e.finish()]);
-let initial = await read(sim.state);
+const initial = await read(sim.state);
 assert.equal(
   new Set(Array.from({ length: 50000 }, (_, i) => initial[i * 12 + 11])).size,
   50000,
@@ -90,6 +90,16 @@ for (let frame = 0; frame < 120; frame++) {
   device.queue.submit([e.finish()]);
   if (frame % 2 === 1) await device.queue.onSubmittedWorkDone();
 }
+const pressureFactors = await read(sim.factor);
+let movingCompression2 = 0;
+for (let i = 0; i < 50000; i++)
+  movingCompression2 += Math.max(0, pressureFactors[i * 4 + 1] - 1) ** 2;
+const movingCompressionRms = Math.sqrt(movingCompression2 / 50000);
+console.log('disturbed compression RMS', movingCompressionRms);
+assert.ok(
+  movingCompressionRms < 0.03,
+  'strongly disturbed water must retain bounded volume compression',
+);
 const moving = await read(sim.state);
 assert.ok(moving.every(Number.isFinite));
 const duck = await read(sim.duck);
@@ -163,11 +173,20 @@ for (let k = 0; k < 30720; k++) {
         0,
         Math.min(
           [31, 39, 23][a],
-          Math.floor((v - [-2.04, -1.19, -1.53][a]) / (0.225 * scale)),
+          Math.floor(
+            Math.fround(
+              Math.fround(v - Math.fround([-2.04, -1.19, -1.53][a])) /
+                Math.fround(Math.fround(0.225) * Math.fround(scale)),
+            ),
+          ),
         ),
       ),
     );
-    assert.equal(c[0] + 32 * (c[1] + 40 * c[2]), k);
+    assert.equal(
+      c[0] + 32 * (c[1] + 40 * c[2]),
+      k,
+      `f32 cell oracle: ${JSON.stringify({ position: Array.from(p), expected: Array.from(c), actual: k })}`,
+    );
   }
 }
 // Empty grid/reduction and re-injection after draining must never retain stale water.
@@ -201,10 +220,78 @@ for (const quality of [15000, 30000, 50000]) {
     quality,
   );
 }
+// A solitary drop gives an independent ballistic oracle. Different gravity
+// values in two queued ticks plus reconstruction must not overwrite uniforms,
+// duplicate the splash impulse, or advance the clock at half/double speed.
+async function ballistic(batched) {
+  let encoder = device.createCommandEncoder();
+  sim.reset(encoder, 50000);
+  device.queue.submit([encoder.finish()]);
+  sim.count = 1;
+  device.queue.writeBuffer(
+    sim.state,
+    0,
+    new Float32Array([0.3, 0.6, 0, 1, 0.3, 0.6, 0, 1, 0, 0.3, 0, 0]),
+  );
+  device.queue.writeBuffer(
+    sim.duck,
+    0,
+    new Float32Array([0, 10, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]),
+  );
+  encoder = device.createCommandEncoder();
+  sim.step(
+    encoder,
+    {
+      forces: { gravity: 4, viscosity: 0, agitation: 0 },
+      surfaceTension: false,
+      splash: [0.3, 0, 0.25],
+    },
+    0,
+  );
+  if (!batched) {
+    device.queue.submit([encoder.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    encoder = device.createCommandEncoder();
+  }
+  sim.step(
+    encoder,
+    {
+      forces: { gravity: 9, viscosity: 0, agitation: 0 },
+      surfaceTension: false,
+    },
+    batched ? 1 : 0,
+  );
+  volume.encode(encoder, sim, false);
+  device.queue.submit([encoder.finish()]);
+  assert.ok(Math.abs(sim.time - 1 / 30) < 1e-12);
+  return (await read(sim.state)).slice(0, 12);
+}
+const batched = await ballistic(true),
+  separate = await ballistic(false);
+for (const k of [0, 1, 2, 8, 9, 10])
+  assert.ok(
+    Math.abs(batched[k] - separate[k]) < 1e-5,
+    'batched and separate submission must agree',
+  );
+// Gravity integrates to -(4+9)/60 and the one-off splash contributes +0.4.
+// Allow the documented mild velocity damping and f32 reconstruction error.
+assert.ok(
+  Math.abs(batched[9] - (0.3 + 0.4 - 13 / 60)) < 0.004,
+  'splash must apply once per tick',
+);
+assert.ok(
+  batched[1] > 0.615 && batched[1] < 0.625,
+  'drop advances for exactly 1/30 second',
+);
+console.log(
+  'ballistic batching and single splash',
+  Array.from(batched.slice(0, 3)),
+  batched[9],
+);
 assert.equal(lost, undefined, JSON.stringify(lost));
 assert.deepEqual(errors, []);
 console.log(
-  'PASS: 50k stable/disturbed motion, exact grid, density oracle, empty/reinjection, all quality levels, two substeps',
+  'PASS: 50k stable/disturbed motion, exact grid, density oracle, empty/reinjection, all quality levels, two queued ticks',
 );
 // Retain native Dawn mapped-buffer wrappers through process teardown.
 await device.queue.onSubmittedWorkDone();

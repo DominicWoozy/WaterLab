@@ -1,7 +1,7 @@
 import { buffer, ComputeKernel } from './compute.ts';
 import { CAPACITY } from './common.ts';
 import { volumeShaders } from './volume-shaders.ts';
-import type { WebGPUSimulation } from './simulation.ts';
+import { RENDER_PARAMETER_SLOT, type WebGPUSimulation } from './simulation.ts';
 export class WebGPUVolume {
   readonly texture: GPUTexture;
   readonly view: GPUTextureView;
@@ -73,7 +73,7 @@ export class WebGPUVolume {
       0,
       new Uint32Array([+details, 0, 0, 0]),
     );
-    const p = sim.writeParameters(4, {
+    const p = sim.writeParameters(RENDER_PARAMETER_SLOT, {
       forces: { gravity: sim.gravity, viscosity: 0.025, agitation: 0 },
     });
     // This fresh grid makes render-kernel gathering exact after pressure/contact corrections.

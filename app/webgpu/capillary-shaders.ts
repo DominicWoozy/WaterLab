@@ -1,4 +1,4 @@
-import { common, neighbors } from './common.ts';
+import { common, cachedNeighbors as neighbors } from './common.ts';
 import { tensionCommon } from './surface-tension-shaders.ts';
 
 // Frozen-coefficient backward Euler, inspired by Jeske et al.'s separation of

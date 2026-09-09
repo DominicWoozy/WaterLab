@@ -1,4 +1,9 @@
-import { CAPACITY, GRID_CELLS, WORKGROUP } from './common.ts';
+import {
+  CAPACITY,
+  GRID_CELLS,
+  GRID_STORAGE_WORDS,
+  WORKGROUP,
+} from './common.ts';
 import { ComputeKernel, buffer } from './compute.ts';
 import { gridShaders } from './grid-shaders.ts';
 import { fluidShaders } from './fluid-shaders.ts';
@@ -6,6 +11,12 @@ import { duckShaders } from './duck-shaders.ts';
 import { capillaryShaders } from './capillary-shaders.ts';
 import type { FluidJob } from '../fluid-runtime.ts';
 export type WebGPUQuality = 15000 | 30000 | 50000;
+export const PHYSICS_SUBSTEPS = 3;
+export const PHYSICS_DT = 1 / (60 * PHYSICS_SUBSTEPS);
+// Two scheduled ticks can share a submission: each substep has regular and
+// reaction-reset uniforms. Rendering and reset must not overwrite those slots.
+export const RENDER_PARAMETER_SLOT = 4 * PHYSICS_SUBSTEPS;
+const RESET_PARAMETER_SLOT = RENDER_PARAMETER_SLOT + 1;
 export type StepInput = Pick<FluidJob, 'forces' | 'brush'> & {
   shake?: number;
   splash?: number[];
@@ -52,7 +63,10 @@ export class WebGPUSimulation {
     this.spare = alloc('particles-b', CAPACITY * 48);
     this.duck = alloc('duck-a', 64);
     this.duckSpare = alloc('duck-b', 64);
-    this.starts = alloc('cell starts', (GRID_CELLS + 1) * 4);
+    this.starts = alloc(
+      'cell starts and neighbor cache',
+      GRID_STORAGE_WORDS * 4,
+    );
     this.counts = alloc('cell counts', GRID_CELLS * 4);
     this.cursor = alloc('cell cursors', GRID_CELLS * 4);
     this.totals = alloc('block totals', 128 * 4);
@@ -69,9 +83,7 @@ export class WebGPUSimulation {
     this.reactionSpare = alloc('sorted reactions', CAPACITY * 32);
     this.reactionGroups = alloc('reaction groups', 256 * 32);
     this.reactionTotal = alloc('reaction sum', 32);
-    // Two substeps can be encoded together without queue.writeBuffer overwriting
-    // uniforms of an earlier dispatch. The third set is for render-only rebuilds.
-    this.parameters = Array.from({ length: 6 }, (_, i) =>
+    this.parameters = Array.from({ length: RESET_PARAMETER_SLOT + 1 }, (_, i) =>
       alloc(
         `parameters-${i}`,
         96,
@@ -107,7 +119,7 @@ export class WebGPUSimulation {
     ]);
     f.set(
       [
-        1 / 60,
+        PHYSICS_DT,
         this.time,
         Math.cbrt(10000 / this.quality),
         input.forces.gravity,
@@ -191,7 +203,7 @@ export class WebGPUSimulation {
     this.quality = quality;
     this.count = quality;
     this.time = 0;
-    const p = this.writeParameters(4, {
+    const p = this.writeParameters(RESET_PARAMETER_SLOT, {
       forces: { gravity: 9.8, viscosity: 0.025, agitation: 0 },
     });
     const pass = encoder.beginComputePass({ label: 'reset' });
@@ -209,7 +221,7 @@ export class WebGPUSimulation {
   }
   buildGrid(
     encoder: GPUCommandEncoder,
-    p = this.parameters[4],
+    p = this.parameters[RENDER_PARAMETER_SLOT],
     reorderReactions = false,
   ) {
     encoder.clearBuffer(this.counts);
@@ -241,6 +253,18 @@ export class WebGPUSimulation {
     pass.end();
   }
   step(encoder: GPUCommandEncoder, input: StepInput, slot = 0) {
+    // A splash is an impulse, while brush/shake/gravity are continuous forces.
+    // Newly poured particles must be initialized only in the first substep.
+    for (let substep = 0; substep < PHYSICS_SUBSTEPS; substep++)
+      this.substep(
+        encoder,
+        substep === 0
+          ? input
+          : { ...input, splash: undefined, previousCount: this.count },
+        slot * PHYSICS_SUBSTEPS + substep,
+      );
+  }
+  private substep(encoder: GPUCommandEncoder, input: StepInput, slot: number) {
     this.gravity = input.forces.gravity;
     const p = this.writeParameters(slot * 2, input),
       first = this.writeParameters(slot * 2 + 1, input, true);
@@ -258,7 +282,9 @@ export class WebGPUSimulation {
     pass.end();
     this.buildGrid(encoder, p);
     pass = encoder.beginComputePass({ label: 'fluid-pressure-and-duck' });
-    for (let iteration = 0; iteration < 3; iteration++) {
+    // Three 1/180-second steps with four relaxed rounds each keep compression
+    // below the equilibrium target with fewer traversals than two deep solves.
+    for (let iteration = 0; iteration < 4; iteration++) {
       this.run(pass, 'lambda', p);
       this.run(pass, 'correct', iteration === 0 ? first : p, {
         4: this.lambda,
@@ -267,7 +293,7 @@ export class WebGPUSimulation {
       this.swap();
       // One correction can move a particle by .042*scale including duck contact.
       // Refresh before this exceeds the .055*scale cell support margin.
-      if (iteration === 1) {
+      if (iteration % 2 === 1) {
         pass.end();
         this.buildGrid(encoder, p, true);
         pass = encoder.beginComputePass({
@@ -275,11 +301,10 @@ export class WebGPUSimulation {
         });
       }
     }
-    this.run(pass, 'velocity', p);
+    // Positions remain fixed: gather exact neighbors and factors while
+    // reconstructing velocity, then reuse the list through all projections.
+    this.run(pass, 'prepareVelocity', p, { 5: this.factor });
     this.swap();
-    // Reuse the factor gradient for general surface normals and fuse cohesion
-    // into viscosity; no sheet classification or additional default traversal.
-    this.run(pass, 'factor', p, { 4: this.lambda, 5: this.factor });
     this.run(pass, 'viscosity', p);
     this.swap();
     if ((input.surfaceTension ?? true) && input.capillaryMode === 'implicit')
@@ -312,7 +337,7 @@ export class WebGPUSimulation {
     );
     this.swapDuck();
     pass.end();
-    this.time += 1 / 60;
+    this.time += PHYSICS_DT;
   }
   destroy() {
     this.owned.forEach((b) => b.destroy());

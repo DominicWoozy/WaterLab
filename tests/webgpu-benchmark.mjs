@@ -19,7 +19,7 @@ const device = await adapter.requestDevice({ requiredFeatures: features });
 const errors = [];
 let lost;
 device.addEventListener('uncapturederror', (e) => errors.push(e.error.message));
-device.lost.then((info) => {
+void device.lost.then((info) => {
   lost = info;
 });
 const sim = await WebGPUSimulation.create(device);
@@ -109,21 +109,24 @@ const timing = features.includes('timestamp-query')
 function timedEncoder(frame) {
   const encoder = device.createCommandEncoder();
   if (!timing) return encoder;
+  let started = false;
   return new Proxy(encoder, {
     get(target, key) {
       if (key === 'beginComputePass')
-        return (descriptor) =>
-          target.beginComputePass(
-            descriptor?.label === 'predict'
-              ? {
-                  ...descriptor,
-                  timestampWrites: {
-                    querySet: timing,
-                    beginningOfPassWriteIndex: frame * 2,
-                  },
-                }
-              : descriptor,
-          );
+        return (descriptor) => {
+          // A tick has several physical substeps; measure from the first one.
+          if (descriptor?.label === 'predict' && !started) {
+            started = true;
+            return target.beginComputePass({
+              ...descriptor,
+              timestampWrites: {
+                querySet: timing,
+                beginningOfPassWriteIndex: frame * 2,
+              },
+            });
+          }
+          return target.beginComputePass(descriptor);
+        };
       if (key === 'beginRenderPass')
         return (descriptor) =>
           target.beginRenderPass(

@@ -17,7 +17,9 @@
     "benchmark:webgpu": "node --experimental-strip-types tests/webgpu-benchmark.mjs",
     "test:webgpu:details": "node --experimental-strip-types tests/webgpu-details.mjs",
     "test:presentation": "node --test tests/webgpu-presentation.test.mjs",
-    "test:webgpu:surface": "node --experimental-strip-types tests/webgpu-surface.mjs"
+    "test:webgpu:surface": "node --experimental-strip-types tests/webgpu-surface.mjs",
+    "test:webgpu:settling": "node --experimental-strip-types tests/webgpu-settling.mjs",
+    "test:webgpu:neighbors": "node --experimental-strip-types tests/webgpu-neighbors.mjs"
   },
   "dependencies": {
     "react": "19.2.6",
