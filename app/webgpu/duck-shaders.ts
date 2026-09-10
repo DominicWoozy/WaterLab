@@ -50,7 +50,9 @@ for (const [name, limit] of [
  @group(0) @binding(2) var<storage,read_write> output:array<Reaction>;
  var<workgroup> linear:array<vec4f,256>;var<workgroup> angular:array<vec4f,256>;
  @compute @workgroup_size(256) fn main(@builtin(global_invocation_id) gid:vec3u,@builtin(local_invocation_index) lane:u32,@builtin(workgroup_id) group:vec3u){
- var a=Reaction(vec4f(0.),vec4f(0.));if(gid.x<${limit}){a=input[gid.x];}linear[lane]=a.linear;angular[lane]=a.angular;workgroupBarrier();
+ var a=Reaction(vec4f(0.),vec4f(0.));
+ ${name === 'reduceGroups' ? `for(var j=lane;j<${limit};j+=256u){a.linear+=input[j].linear;a.angular+=input[j].angular;}` : `if(gid.x<${limit}){a=input[gid.x];}`}
+ linear[lane]=a.linear;angular[lane]=a.angular;workgroupBarrier();
  for(var stride=128u;stride>0u;stride/=2u){if(lane<stride){linear[lane]+=linear[lane+stride];angular[lane]+=angular[lane+stride];}workgroupBarrier();}
  if(lane==0u){output[group.x]=Reaction(linear[0],angular[0]);}
  }`;

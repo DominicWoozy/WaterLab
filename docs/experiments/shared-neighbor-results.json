@@ -1,0 +1,101 @@
+[
+  {
+    "experiment": "shared32-calm",
+    "particles": 50000,
+    "resolution": [1250, 800],
+    "scene": "calm",
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 23.317708800000002,
+        "p50": 23.26528,
+        "p95": 25.100288
+      },
+      "off": {
+        "mean": 22.36525226666667,
+        "p50": 22.478848,
+        "p95": 23.789568
+      }
+    },
+    "errors": []
+  },
+  {
+    "experiment": "workgroups32-calm",
+    "particles": 50000,
+    "resolution": [1250, 800],
+    "scene": "calm",
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 25.336217599999998,
+        "p50": 24.772608,
+        "p95": 30.408704
+      },
+      "off": {
+        "mean": 24.350993066666668,
+        "p50": 24.24832,
+        "p95": 29.229056
+      }
+    },
+    "errors": []
+  },
+  {
+    "experiment": "workgroups64-calm",
+    "particles": 50000,
+    "resolution": [1250, 800],
+    "scene": "calm",
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 23.381060266666672,
+        "p50": 23.92064,
+        "p95": 26.86976
+      },
+      "off": {
+        "mean": 22.712593066666663,
+        "p50": 22.675456,
+        "p95": 25.493504
+      }
+    },
+    "errors": []
+  },
+  {
+    "experiment": "workgroups256-calm",
+    "particles": 50000,
+    "resolution": [1250, 800],
+    "scene": "calm",
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 20.082414933333336,
+        "p50": 19.922944,
+        "p95": 20.97152
+      },
+      "off": {
+        "mean": 19.791872,
+        "p50": 19.857408,
+        "p95": 20.905984
+      }
+    },
+    "errors": []
+  },
+  {
+    "mode": "shared",
+    "width": 32,
+    "shared": true,
+    "particles": 50000,
+    "scene": "calm",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 21.873732266666664,
+        "p50": 21.757952,
+        "p95": 24.707072
+      },
+      "off": {
+        "mean": 20.78365013333333,
+        "p50": 20.578304,
+        "p95": 24.510464
+      }
+    },
+    "errors": [],
+    "experiment": "shared32-calm-repeat"
+  }
+]

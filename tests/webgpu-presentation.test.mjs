@@ -89,7 +89,8 @@ async function harness(backend = 'webgpu') {
     quality: 50000,
     count: 50000,
     time: 0,
-    reset() {
+    reset(_encoder, quality = this.quality) {
+      this.count = this.quality = quality;
       this.time = 0;
     },
     step() {
@@ -114,6 +115,7 @@ async function harness(backend = 'webgpu') {
     destroy() {},
   };
   const factories = {
+    './common.ts': { CAPACITY: 100000 },
     './duck-model': { loadDuckModel: () => ({ ready: true, destroy() {} }) },
     './gpu-volume-config': { GPU_VOLUME_SIZE: [128, 160, 96] },
     './fluid-volume': {
@@ -127,7 +129,12 @@ async function harness(backend = 'webgpu') {
         count = 15000;
         quality = 15000;
         time = 0;
-        update() {
+        update(job) {
+          for (const action of job.actions ?? [])
+            if (action.type === 'quality') {
+              trace.push(`quality-${action.count}`);
+              this.count = this.quality = action.count;
+            }
           this.time += 1 / 60;
         }
         destroy() {}
@@ -197,6 +204,7 @@ async function harness(backend = 'webgpu') {
   );
   return {
     engine,
+    sim,
     document,
     settings,
     trace,
@@ -332,6 +340,35 @@ test('reconstruction reuses neighbors only after a completed physical tick', asy
     doubleTick.includes('density-reuse'),
     'two ticks use the final tick cache',
   );
+  assert.deepEqual(h.errors, []);
+  h.engine.destroy();
+});
+
+// High presets must survive reset and the engine's pending-action queue.
+test('70k and 100k quality changes reach the simulation and can switch back', async () => {
+  const h = await harness();
+  await h.frame(16);
+  let now = 32;
+  for (const count of [70000, 100000, 15000, 100000, 50000]) {
+    h.engine.setQuality(count);
+    await h.frame(now);
+    now += 32;
+    assert.equal(h.sim.quality, count);
+    assert.equal(h.sim.count, count);
+  }
+  assert.deepEqual(h.errors, []);
+  h.engine.destroy();
+});
+
+test('WebGL2 maps unsupported high particle presets to 30k', async () => {
+  const h = await harness('webgl');
+  await h.frame(16);
+  let now = 32;
+  for (const count of [50000, 70000, 100000]) {
+    h.engine.setQuality(count);
+    assert.ok((await h.frame(now)).includes('quality-30000'));
+    now += 32;
+  }
   assert.deepEqual(h.errors, []);
   h.engine.destroy();
 });

@@ -1,0 +1,145 @@
+{
+  "constants-calm": {
+    "mode": "specialized",
+    "prune": false,
+    "constants": true,
+    "compileMs": 199.85745799999998,
+    "particles": 50000,
+    "scene": "calm",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 17.90443519999999,
+        "p50": 17.891328,
+        "p95": 18.0224
+      },
+      "off": {
+        "mean": 17.939387733333326,
+        "p50": 17.891328,
+        "p95": 18.087936
+      }
+    },
+    "errors": []
+  },
+  "pruned-calm": {
+    "mode": "specialized",
+    "prune": true,
+    "constants": true,
+    "compileMs": 433.93174999999997,
+    "particles": 50000,
+    "scene": "calm",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 18.00710826666667,
+        "p50": 18.0224,
+        "p95": 18.219008
+      },
+      "off": {
+        "mean": 18.009292800000004,
+        "p50": 18.0224,
+        "p95": 18.219008
+      }
+    },
+    "errors": []
+  },
+  "pruned-rough": {
+    "mode": "specialized",
+    "prune": true,
+    "constants": true,
+    "compileMs": 23.548249999999996,
+    "particles": 50000,
+    "scene": "rough",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 19.092821333333333,
+        "p50": 19.136512,
+        "p95": 19.595264
+      },
+      "off": {
+        "mean": 19.081898666666664,
+        "p50": 19.070976,
+        "p95": 19.529728
+      }
+    },
+    "errors": []
+  },
+  "frozen-calm": {
+    "mode": "specialized",
+    "prune": true,
+    "constants": true,
+    "freeze": true,
+    "compileMs": 1284.063416,
+    "particles": 50000,
+    "scene": "calm",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 17.956864,
+        "p50": 17.956864,
+        "p95": 18.087936
+      },
+      "off": {
+        "mean": 17.989632000000004,
+        "p50": 17.956864,
+        "p95": 18.153472
+      }
+    },
+    "errors": []
+  },
+  "kernels": [
+    {
+      "key": "false/0/true",
+      "ms": 0.11414186666666666
+    },
+    {
+      "key": "false/0/false",
+      "ms": 0.1179648
+    },
+    {
+      "key": "false/1/true",
+      "ms": 0.212992
+    },
+    {
+      "key": "false/1/false",
+      "ms": 0.22118399999999996
+    },
+    {
+      "key": "false/2/true",
+      "ms": 0.212992
+    },
+    {
+      "key": "false/2/false",
+      "ms": 0.22227626666666667
+    },
+    {
+      "key": "true/0/true",
+      "ms": 0.11304960000000001
+    },
+    {
+      "key": "true/0/false",
+      "ms": 0.11250346666666666
+    },
+    {
+      "key": "true/1/true",
+      "ms": 0.2118997333333333
+    },
+    {
+      "key": "true/1/false",
+      "ms": 0.22227626666666667
+    },
+    {
+      "key": "true/2/true",
+      "ms": 0.212992
+    },
+    {
+      "key": "true/2/false",
+      "ms": 0.22227626666666667
+    }
+  ]
+}

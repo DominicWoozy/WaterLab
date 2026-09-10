@@ -10,7 +10,11 @@ import { fluidShaders } from './fluid-shaders.ts';
 import { duckShaders } from './duck-shaders.ts';
 import { capillaryShaders } from './capillary-shaders.ts';
 import type { FluidJob } from '../fluid-runtime.ts';
-export type WebGPUQuality = 15000 | 30000 | 50000;
+import {
+  PARTICLE_QUALITIES,
+  type ParticleQuality,
+} from '../gpu-particle-config.ts';
+export type WebGPUQuality = ParticleQuality;
 export const PHYSICS_SUBSTEPS = 3;
 export const PHYSICS_DT = 1 / (60 * PHYSICS_SUBSTEPS);
 // Two scheduled ticks can share a submission: each substep has regular and
@@ -81,7 +85,10 @@ export class WebGPUSimulation {
     this.capillaryNext = alloc('capillary velocity b', CAPACITY * 16);
     this.reactions = alloc('particle reactions', CAPACITY * 32);
     this.reactionSpare = alloc('sorted reactions', CAPACITY * 32);
-    this.reactionGroups = alloc('reaction groups', 256 * 32);
+    this.reactionGroups = alloc(
+      'reaction groups',
+      Math.ceil(CAPACITY / 256) * 32,
+    );
     this.reactionTotal = alloc('reaction sum', 32);
     this.parameters = Array.from({ length: RESET_PARAMETER_SLOT + 1 }, (_, i) =>
       alloc(
@@ -200,6 +207,8 @@ export class WebGPUSimulation {
     this.swap();
   }
   reset(encoder: GPUCommandEncoder, quality: WebGPUQuality = 50000) {
+    if (!PARTICLE_QUALITIES.includes(quality))
+      throw new Error('不支持的粒子精度');
     this.quality = quality;
     this.count = quality;
     this.time = 0;
@@ -284,7 +293,10 @@ export class WebGPUSimulation {
     pass = encoder.beginComputePass({ label: 'fluid-pressure-and-duck' });
     // Three 1/180-second steps with four relaxed rounds each keep compression
     // below the equilibrium target with fewer traversals than two deep solves.
-    for (let iteration = 0; iteration < 4; iteration++) {
+    // Higher resolutions need two additional relaxed rounds to retain the
+    // same <1% equilibrium compression target. Existing presets stay unchanged.
+    const pressureIterations = this.quality > 50000 ? 6 : 4;
+    for (let iteration = 0; iteration < pressureIterations; iteration++) {
       this.run(pass, 'lambda', p);
       this.run(pass, 'correct', iteration === 0 ? first : p, {
         4: this.lambda,

@@ -1,4 +1,4 @@
-export const CAPACITY = 50000;
+export const CAPACITY = 100000;
 export const GRID_CELLS = 32 * 40 * 24;
 export const WORKGROUP = 128;
 export const NEIGHBOR_CACHE_SIZE = 96;
@@ -27,7 +27,10 @@ fn h()->f32 {return .17*P.clock.z;}
 fn particleMass()->f32 {return (2.*3.14159265/15.)*h()*h()*h()/REST;}
 fn limited(v:vec3f,m:f32)->vec3f {return v*min(1.,m/max(length(v),.000001));}
 fn bound(p:vec3f)->vec3f {return clamp(p,vec3f(-1.78,-.917,-1.28),vec3f(1.78,3.8,1.28));}
-fn cell(p:vec3f)->vec3i {return clamp(vec3i(floor((p-vec3f(-2.04,-1.19,-1.53))/(.225*P.clock.z))),vec3i(0),vec3i(31,39,23));}
+// Keep the full container inside the fixed grid at higher particle resolutions.
+// This changes only candidate partitioning; h() still shrinks with particle mass.
+fn cellSize()->f32 {return .225*max(P.clock.z,0.5848035476425733);}
+fn cell(p:vec3f)->vec3i {return clamp(vec3i(floor((p-vec3f(-2.04,-1.19,-1.53))/cellSize())),vec3i(0),vec3i(31,39,23));}
 fn key(c:vec3i)->u32 {return u32(c.x+32*(c.y+40*c.z));}
 fn qrotate(q:vec4f,v:vec3f)->vec3f {return v+2.*cross(q.xyz,cross(q.xyz,v)+q.w*v);}
 fn conjugate(q:vec4f)->vec4f {return vec4f(-q.xyz,q.w);}

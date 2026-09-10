@@ -1,0 +1,218 @@
+diff --git a/app/webgpu/common.ts b/app/webgpu/common.ts
+index 70094d1..5e11be2 100644
+--- a/app/webgpu/common.ts
++++ b/app/webgpu/common.ts
+@@ -3,10 +3,13 @@ export const GRID_CELLS = 32 * 40 * 24;
+ export const WORKGROUP = 128;
+ export const NEIGHBOR_CACHE_SIZE = 96;
+ export const NEIGHBOR_CACHE_BASE = GRID_CELLS + 1;
++// Each list stores a full u32 base and packed u16 relative indices. The upper
++// count bit marks a raw u32 list when a relative index cannot fit. Reserve the
++// original raw capacity so that fallback never allocates or drops neighbors.
+ // Store the optional cache behind cell offsets in the same storage binding.
+ // A full cache falls back to complete cell traversal; it never truncates physics.
+ export const GRID_STORAGE_WORDS =
+-  NEIGHBOR_CACHE_BASE + CAPACITY * (NEIGHBOR_CACHE_SIZE + 1);
++  NEIGHBOR_CACHE_BASE + CAPACITY * (NEIGHBOR_CACHE_SIZE + 2);
+ 
+ export const common = /* wgsl */ `
+ struct Particle { pos: vec4f, old: vec4f, vel: vec4f }
+@@ -85,15 +88,27 @@ export function neighbors(body: string) {
+ }
+ 
+ export function cachedNeighbors(body: string) {
+-  return /* wgsl */ `
+- let cachedCount=starts[${NEIGHBOR_CACHE_BASE}u+i];
+- if(cachedCount<=${NEIGHBOR_CACHE_SIZE}u){
+-  for(var entry=0u;entry<cachedCount;entry++){
+-   let j=starts[${NEIGHBOR_CACHE_BASE + CAPACITY}u+entry*${CAPACITY}u+i];
++  const visit = /* wgsl */ `
+    let diff=p-input[j].pos.xyz;let r2=dot(diff,diff);
+    if(r2>=h()*h()||r2<1e-12){continue;}
+    let r=sqrt(r2);let q=1.-r/h();let gradient=(2.*q/(h()*REST*r))*diff;
+-   ${body}
++   ${body}`;
++  return /* wgsl */ `
++ let cacheHeader=starts[${NEIGHBOR_CACHE_BASE}u+i];let cachedCount=cacheHeader&0x7fffffffu;
++ if(cachedCount<=${NEIGHBOR_CACHE_SIZE}u){
++  if((cacheHeader&0x80000000u)==0u){
++   let origin=starts[${NEIGHBOR_CACHE_BASE + CAPACITY}u+i];
++   var packed=0u;
++   for(var entry=0u;entry<cachedCount;entry++){
++    if((entry&1u)==0u){packed=starts[${NEIGHBOR_CACHE_BASE + CAPACITY * 2}u+(entry/2u)*${CAPACITY}u+i];}
++    let j=origin+((packed>>((entry&1u)*16u))&65535u);
++    ${visit}
++   }
++  }else{
++   for(var entry=0u;entry<cachedCount;entry++){
++    let j=starts[${NEIGHBOR_CACHE_BASE + CAPACITY * 2}u+entry*${CAPACITY}u+i];
++    ${visit}
++   }
+   }
+  }else{
+   ${neighbors(body)}
+@@ -101,11 +116,37 @@ export function cachedNeighbors(body: string) {
+  `;
+ }
+ 
+-// Record every count even when the index cache fills, so readers can fall back
+-// to complete grid traversal. The caller owns `count` and the current i/j pair.
++export function beginNeighborCache() {
++  return /* wgsl */ `
++  var count=0u;var cachePacked=0u;
++  // Both builders visit a subset of the adjacent-cell box. Its contiguous
++  // index interval decides the encoding BEFORE visiting individual neighbors.
++  let cacheCell=cell(p);
++  let cacheOrigin=starts[key(max(cacheCell-vec3i(1),vec3i(0)))];
++  let cacheEnd=starts[key(min(cacheCell+vec3i(1),vec3i(31,39,23)))+1u];
++  let cacheWide=cacheEnd-cacheOrigin>65536u;
++  starts[${NEIGHBOR_CACHE_BASE + CAPACITY}u+i]=cacheOrigin;
++  `;
++}
++
++// One thread owns all words of its list, including a partial final pair.
+ export function recordNeighbor() {
+   return /* wgsl */ `
+- if(count<${NEIGHBOR_CACHE_SIZE}u){starts[${NEIGHBOR_CACHE_BASE + CAPACITY}u+count*${CAPACITY}u+i]=j;}
++ if(count<${NEIGHBOR_CACHE_SIZE}u){
++  if(cacheWide){starts[${NEIGHBOR_CACHE_BASE + CAPACITY * 2}u+count*${CAPACITY}u+i]=j;}
++  else{
++   if((count&1u)==0u){cachePacked=j-cacheOrigin;}
++   else{cachePacked|=(j-cacheOrigin)<<16u;starts[${NEIGHBOR_CACHE_BASE + CAPACITY * 2}u+(count/2u)*${CAPACITY}u+i]=cachePacked;}
++  }
++ }
+  count++;
+  `;
+ }
++export function finishNeighborCache() {
++  return /* wgsl */ `
++ if(!cacheWide&&count<=${NEIGHBOR_CACHE_SIZE}u&&(count&1u)!=0u){
++  starts[${NEIGHBOR_CACHE_BASE + CAPACITY * 2}u+(count/2u)*${CAPACITY}u+i]=cachePacked;
++ }
++ starts[${NEIGHBOR_CACHE_BASE}u+i]=count|select(0u,0x80000000u,cacheWide);
++ `;
++}
+diff --git a/app/webgpu/fluid-shaders.ts b/app/webgpu/fluid-shaders.ts
+index af25c27..99f0eca 100644
+--- a/app/webgpu/fluid-shaders.ts
++++ b/app/webgpu/fluid-shaders.ts
+@@ -1,6 +1,7 @@
+ import {
+   common,
+-  NEIGHBOR_CACHE_BASE,
++  beginNeighborCache,
++  finishNeighborCache,
+   recordNeighbor,
+   cachedNeighbors as neighbors,
+   neighbors as gridNeighbors,
+@@ -57,11 +58,11 @@ export const fluidShaders: Record<string, string> = {
+   lambda: kernel(
+     /* wgsl */ `
+  let p=input[i].pos.xyz;let wall=wallSupport(p)+duckSupport(p,duck);
+- var rho=wall.w;var sum=0.;var grad=wall.xyz;var count=0u;
++ var rho=wall.w;var sum=0.;var grad=wall.xyz;${beginNeighborCache()}
+  // The following correction reads these same positions. Cache while gathering
+  // pressure, then rebuild at the next lambda pass after positions have changed.
+  ${gridNeighbors(`rho+=q*q;grad+=gradient;sum+=dot(gradient,gradient);${recordNeighbor()}`)}
+- starts[${NEIGHBOR_CACHE_BASE}u+i]=count;
++ ${finishNeighborCache()}
+  // Neighbor constraints update simultaneously. Full Jacobi corrections overshoot
+  // in the dense bulk and become velocity impulses on the next pass. Relax the
+  // constraint multiplier (including boundary reactions), not the fluid velocity.
+diff --git a/app/webgpu/grid-shaders.ts b/app/webgpu/grid-shaders.ts
+index c04f4a4..7b50fdc 100644
+--- a/app/webgpu/grid-shaders.ts
++++ b/app/webgpu/grid-shaders.ts
+@@ -1,4 +1,9 @@
+-import { common, NEIGHBOR_CACHE_BASE, recordNeighbor } from './common.ts';
++import {
++  common,
++  beginNeighborCache,
++  finishNeighborCache,
++  recordNeighbor,
++} from './common.ts';
+ import { tensionCommon } from './surface-tension-shaders.ts';
+ export const gridShaders: Record<string, string> = {
+   count:
+@@ -84,7 +89,7 @@ gridShaders.prepareVelocity =
+  @compute @workgroup_size(128) fn main(@builtin(global_invocation_id) gid:vec3u){
+   let i=gid.x;if(i>=P.counts.x){return;}let p=input[i].pos.xyz;
+   let radius=h()+.00001*P.clock.z;let radius2=radius*radius;let size=.225*P.clock.z;
+-  let lo=cell(p-vec3f(radius));let hi=cell(p+vec3f(radius));var count=0u;
++  let lo=cell(p-vec3f(radius));let hi=cell(p+vec3f(radius));${beginNeighborCache()}
+   let wall=wallSupport(p)+duckSupport(p,duck);var rho=wall.w;var sum=0.;var nearby=0.;var grad=wall.xyz;
+   for(var z=lo.z;z<=hi.z;z++){
+    for(var y=lo.y;y<=hi.y;y++){
+@@ -104,7 +109,7 @@ gridShaders.prepareVelocity =
+     }
+    }
+   }
+-  starts[${NEIGHBOR_CACHE_BASE}u+i]=count;
++  ${finishNeighborCache()}
+   surface[i]=vec4f(limited(-h()*grad,2.),(rho+1.)/REST);
+   var f=0.;if(nearby>=12.&&rho>REST*.4){f=1./max(sum+dot(grad,grad),1e-6);}
+   // Reused by every surface-tension pair while positions/normals stay fixed.
+diff --git a/tests/webgpu-neighbors.mjs b/tests/webgpu-neighbors.mjs
+index 21f2061..25f31a5 100644
+--- a/tests/webgpu-neighbors.mjs
++++ b/tests/webgpu-neighbors.mjs
+@@ -33,6 +33,16 @@ async function read(buffer) {
+   staging.unmap();
+   return data;
+ }
++function cachedIndex(cache, i, entry) {
++  const header = cache[NEIGHBOR_CACHE_BASE + i];
++  const at = NEIGHBOR_CACHE_BASE + CAPACITY * 2;
++  if (header >>> 31) return cache[at + entry * CAPACITY + i];
++  const packed = cache[at + Math.floor(entry / 2) * CAPACITY + i];
++  return (
++    cache[NEIGHBOR_CACHE_BASE + CAPACITY + i] +
++    ((packed >>> ((entry % 2) * 16)) & 65535)
++  );
++}
+ const input = {
+   forces: { gravity: 0, viscosity: 0.025, agitation: 0 },
+   surfaceTension: false,
+@@ -123,7 +133,7 @@ for (const [name, spacing] of [
+       expected.push(j);
+       rho += (1 - r / h) ** 2;
+     }
+-    const count = cache[NEIGHBOR_CACHE_BASE + i];
++    const count = cache[NEIGHBOR_CACHE_BASE + i] & 0x7fffffff;
+     assert.equal(count, expected.length, 'all-pairs neighbor count');
+     assert.ok(
+       Math.abs(factors[i * 4 + 1] - rho / 3.6) < 2e-4,
+@@ -134,10 +144,8 @@ for (const [name, spacing] of [
+       overflowing++;
+       continue;
+     }
+-    const actual = Array.from(
+-      { length: count },
+-      (_, entry) =>
+-        cache[NEIGHBOR_CACHE_BASE + CAPACITY + entry * CAPACITY + i],
++    const actual = Array.from({ length: count }, (_, entry) =>
++      cachedIndex(cache, i, entry),
+     );
+     assert.deepEqual(
+       actual.sort((a, b) => a - b),
+@@ -226,17 +234,14 @@ for (const [name, spacing] of [
+         'all-pairs pressure multiplier',
+       );
+       assert.equal(
+-        pressureCache[NEIGHBOR_CACHE_BASE + i],
++        pressureCache[NEIGHBOR_CACHE_BASE + i] & 0x7fffffff,
+         list.length,
+         'pressure must refresh poisoned neighbor counts',
+       );
+       if (list.length <= NEIGHBOR_CACHE_SIZE) {
+         const indices = list.map(({ j }) => j);
+-        const cached = indices.map(
+-          (_, entry) =>
+-            pressureCache[
+-              NEIGHBOR_CACHE_BASE + CAPACITY + entry * CAPACITY + i
+-            ],
++        const cached = indices.map((_, entry) =>
++          cachedIndex(pressureCache, i, entry),
+         );
+         assert.deepEqual(
+           cached.sort((a, b) => a - b),

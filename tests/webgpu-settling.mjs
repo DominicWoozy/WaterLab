@@ -125,12 +125,17 @@ function settled(stats, label) {
     `${label}: compression ${stats.compressionRms}`,
   );
 }
-for (const [quality, tension] of [
-  [50000, true],
-  [50000, false],
-  [30000, true],
-  [15000, true],
-]) {
+for (const [quality, tension] of process.env.HIGH_QUALITY === '1'
+  ? [
+      [70000, true],
+      [100000, true],
+    ]
+  : [
+      [50000, true],
+      [50000, false],
+      [30000, true],
+      [15000, true],
+    ]) {
   const encoder = device.createCommandEncoder();
   sim.reset(encoder, quality);
   device.queue.submit([encoder.finish()]);
@@ -142,7 +147,7 @@ for (const [quality, tension] of [
   const label = `${quality} tension=${tension}`;
   console.log(JSON.stringify({ label, seconds: 15, early, late }));
   settled(late, label);
-  if (quality === 50000 && tension) {
+  if (quality >= 50000 && tension) {
     let support = 0;
     for (let sample = 0; sample < 30; sample++) {
       await advance(1, input);
@@ -159,7 +164,7 @@ for (const [quality, tension] of [
     );
     console.log(
       JSON.stringify({
-        label: 'floating equilibrium',
+        label: `${quality} floating equilibrium`,
         support,
         expectedWeight,
         duckY: duck[1],

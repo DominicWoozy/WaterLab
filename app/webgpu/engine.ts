@@ -1,3 +1,4 @@
+import { CAPACITY } from './common.ts';
 import { WebGPUSimulation, type WebGPUQuality } from './simulation.ts';
 import { WebGPUVolume } from './volume.ts';
 import { WebGPURenderer } from './renderer.ts';
@@ -205,7 +206,7 @@ export async function createWebGPUWater(
           pourAt = [b.world[0], b.world[2]];
         }
         const previousCount = sim.count,
-          added = Math.min(18, pendingPour, 50000 - sim.count);
+          added = Math.min(18, pendingPour, CAPACITY - sim.count);
         sim.count += added;
         pendingPour -= added;
         sim.step(
@@ -283,7 +284,7 @@ export async function createWebGPUWater(
           fps: Math.round(fps),
           count: sim.count,
           quality: sim.quality,
-          capacity: 50000,
+          capacity: CAPACITY,
           backend: 'WebGPU',
         });
         const next =
@@ -401,7 +402,7 @@ export async function createWebGPUWater(
     fps: 0,
     count: 50000,
     quality: 50000,
-    capacity: 50000,
+    capacity: CAPACITY,
     backend: 'WebGPU',
   });
   raf = requestAnimationFrame(render);

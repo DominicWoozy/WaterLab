@@ -432,7 +432,7 @@ export function createWebGLWater(
   raf = requestAnimationFrame(render);
   return {
     setQuality: (count: ParticleQuality) => {
-      if (count === 50000) count = 30000;
+      if (count > 30000) count = 30000;
       actions.length = 0;
       actions.push({ type: 'quality', count });
       pointer = null;

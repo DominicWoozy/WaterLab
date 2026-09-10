@@ -70,15 +70,15 @@ export const volumeShaders: Record<string, string> = {
  let base=cell(p);var value=0.;
  // Covariance regularization bounds max kernel stretch by cbrt(1.18/.18)<1.873.
  // Include render-centre displacement; the FINAL-position grid is rebuilt first.
- let reach=(.19*1.873+.025)*P.clock.z;let cellSize=.225*P.clock.z;
+ let reach=(.19*1.873+.025)*P.clock.z;let gridSize=cellSize();
  for(var z=max(0,base.z-2);z<=min(23,base.z+2);z++){
  for(var y=max(0,base.y-2);y<=min(39,base.y+2);y++){
-  let lo=vec2f(-1.19,-1.53)+vec2f(f32(y),f32(z))*cellSize;
-  let gap=max(max(lo-p.yz,p.yz-lo-vec2f(cellSize)),vec2f(0.));
+  let lo=vec2f(-1.19,-1.53)+vec2f(f32(y),f32(z))*gridSize;
+  let gap=max(max(lo-p.yz,p.yz-lo-vec2f(gridSize)),vec2f(0.));
   let remaining=reach*reach-dot(gap,gap);if(remaining<0.){continue;}
   let extent=sqrt(remaining);
-  let x0=clamp(i32(floor((p.x-extent+2.04)/cellSize)),0,31);
-  let x1=clamp(i32(floor((p.x+extent+2.04)/cellSize)),0,31);
+  let x0=clamp(i32(floor((p.x-extent+2.04)/gridSize)),0,31);
+  let x1=clamp(i32(floor((p.x+extent+2.04)/gridSize)),0,31);
   let row=32*(y+40*z);let begin=starts[u32(row+x0)];let end=starts[u32(row+x1+1)];
   for(var j=begin;j<end;j++){
    // Scale the entire kernel with particle resolution. A world-space .095

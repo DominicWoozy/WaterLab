@@ -120,7 +120,7 @@ const input = {
   forces: { gravity: 9.8, viscosity: 0.025, agitation: 1.4 },
   splash: [0.5, 0.3, 2],
 };
-for (const quality of [15000, 30000, 50000]) {
+for (const quality of [15000, 30000, 50000, 70000, 100000]) {
   let e = device.createCommandEncoder();
   sim.reset(e, quality);
   device.queue.submit([e.finish()]);
@@ -176,6 +176,6 @@ assert.ok(
 );
 assert.deepEqual(errors, []);
 console.log(
-  'PASS exact-state reconstruction reuse, 15k/30k/50k, full fields, shapes, primary drops, overflow and drain',
+  'PASS exact-state reconstruction reuse, 15k/30k/50k/70k/100k, full fields, shapes, primary drops, overflow and drain',
 );
 process.exit(0);

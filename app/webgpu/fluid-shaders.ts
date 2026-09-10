@@ -32,10 +32,12 @@ const kernel = (body: string, writeNeighborCache = false) =>
 }`;
 export const fluidShaders: Record<string, string> = {
   initialize: kernel(/* wgsl */ `
- var nx=60u;var ny=5u;
+ var nx=60u;var ny=5u;var nz=50u;
  if(P.counts.y==30000u){nx=75u;ny=8u;}
  if(P.counts.y==50000u){nx=100u;ny=10u;}
- let p=vec3f(-1.7+f32(i%nx)*3.4/f32(nx-1u),-.917+f32(i/(nx*50u))*.36/f32(ny-1u),-1.2+f32((i/nx)%50u)*2.4/49.);
+ if(P.counts.y==70000u){nx=100u;ny=10u;nz=70u;}
+ if(P.counts.y==100000u){nx=125u;ny=10u;nz=80u;}
+ let p=vec3f(-1.7+f32(i%nx)*3.4/f32(nx-1u),-.917+f32(i/(nx*nz))*.36/f32(ny-1u),-1.2+f32((i/nx)%nz)*2.4/f32(nz-1u));
  output[i]=Particle(vec4f(p,1.),vec4f(p,1.),vec4f(0.,0.,0.,f32(i)));
  `),
   predict:

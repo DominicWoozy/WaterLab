@@ -83,7 +83,7 @@ gridShaders.prepareVelocity =
  @group(0) @binding(8) var<storage,read_write> surface:array<vec4f>;
  @compute @workgroup_size(128) fn main(@builtin(global_invocation_id) gid:vec3u){
   let i=gid.x;if(i>=P.counts.x){return;}let p=input[i].pos.xyz;
-  let radius=h()+.00001*P.clock.z;let radius2=radius*radius;let size=.225*P.clock.z;
+  let radius=h()+.00001*P.clock.z;let radius2=radius*radius;let size=cellSize();
   let lo=cell(p-vec3f(radius));let hi=cell(p+vec3f(radius));var count=0u;
   let wall=wallSupport(p)+duckSupport(p,duck);var rho=wall.w;var sum=0.;var nearby=0.;var grad=wall.xyz;
   for(var z=lo.z;z<=hi.z;z++){

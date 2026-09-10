@@ -30,6 +30,7 @@ import {
 import {
   GPU_CAPACITY as CAPACITY,
   GPU_DEFAULT_COUNT as DEFAULT_COUNT,
+  PARTICLE_QUALITIES,
   type ParticleQuality,
 } from './gpu-particle-config';
 function Range({
@@ -302,22 +303,24 @@ export default function Home() {
                   }}
                 >
                   <TabsList aria-label="粒子精度">
-                    <TabsTrigger value="15000" disabled={!ready || !!error}>
-                      15,000
-                    </TabsTrigger>
-                    <TabsTrigger value="30000" disabled={!ready || !!error}>
-                      30,000
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="50000"
-                      disabled={!ready || !!error || stats.backend !== 'WebGPU'}
-                    >
-                      50,000
-                    </TabsTrigger>
+                    {PARTICLE_QUALITIES.map((count) => (
+                      <TabsTrigger
+                        key={count}
+                        value={String(count)}
+                        disabled={
+                          !ready ||
+                          !!error ||
+                          (count > 30000 && stats.backend !== 'WebGPU')
+                        }
+                      >
+                        {count / 10000} 万
+                      </TabsTrigger>
+                    ))}
                   </TabsList>
                 </Tabs>
                 <p>
-                  切换会重置水体。5 万粒子使用 WebGPU；不支持时自动回退 WebGL2。
+                  切换会重置水体。7 万、10 万适合高性能设备；5 万及以上需
+                  WebGPU。
                 </p>
               </div>
               <div className="particle-count">
