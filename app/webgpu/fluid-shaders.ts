@@ -88,7 +88,7 @@ export const fluidShaders: Record<string, string> = {
  let p=input[i].pos.xyz;let v=input[i].vel.xyz;var delta=vec3f(0.);var capillary=vec3f(0.);
  ${neighbors(`delta+=(input[j].vel.xyz-v)*q*q;
  if(P.forces.w>0.){
-  let f=surfacePair(surface[i],surface[j],diff,r,aux[i].z,aux[j].z);let n=diff/r;
+  let f=surfacePairWeighted(surface[i],surface[j],diff,r,aux[i].z,aux[j].z,max(aux[i].w,aux[j].w));let n=diff/r;
   // Pairwise radial dissipation resolves capillary oscillation at the fixed dt.
   // Equal/opposite and central; no damping of rigid translation or rotation.
   let damping=min(2.*sqrt(abs(f)/max(r,.15*h())),.25/(P.clock.x*max(1.,max(aux[i].z,aux[j].z))));
@@ -103,7 +103,7 @@ export const fluidShaders: Record<string, string> = {
  // Include boundary support in normals, but add no wall attraction.
  surface[i]=vec4f(limited(-h()*grad,2.),(rho+1.)/REST);
  var f=0.;if(nearby>=12.&&rho>REST*.4){f=1./max(sum+dot(grad,grad),1e-6);}
- auxOut[i]=vec4f(f,rho/REST,nearby,0.);
+ auxOut[i]=vec4f(f,rho/REST,nearby,surfaceWeight(surface[i]));
  `),
   residual: kernel(/* wgsl */ `
  let p=input[i].pos.xyz;let v=input[i].vel.xyz;

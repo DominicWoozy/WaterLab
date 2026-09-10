@@ -1,4 +1,5 @@
 import { common, NEIGHBOR_CACHE_BASE, recordNeighbor } from './common.ts';
+import { tensionCommon } from './surface-tension-shaders.ts';
 export const gridShaders: Record<string, string> = {
   count:
     common +
@@ -72,6 +73,7 @@ gridShaders.scatterReactions = gridShaders.scatter
 // exact neighbor cache and pressure factors together, once per physical substep.
 gridShaders.prepareVelocity =
   common +
+  tensionCommon +
   /* wgsl */ `
  @group(0) @binding(1) var<storage,read> input:array<Particle>;
  @group(0) @binding(2) var<storage,read_write> output:array<Particle>;
@@ -105,7 +107,8 @@ gridShaders.prepareVelocity =
   starts[${NEIGHBOR_CACHE_BASE}u+i]=count;
   surface[i]=vec4f(limited(-h()*grad,2.),(rho+1.)/REST);
   var f=0.;if(nearby>=12.&&rho>REST*.4){f=1./max(sum+dot(grad,grad),1e-6);}
-  factors[i]=vec4f(f,rho/REST,nearby,0.);
+  // Reused by every surface-tension pair while positions/normals stay fixed.
+  factors[i]=vec4f(f,rho/REST,nearby,surfaceWeight(surface[i]));
   var a=input[i];var v=(a.pos.xyz-a.old.xyz)/P.clock.x;
   if(a.old.w<.5){v=vec3f(0.,-1.4,0.);}
   a.vel=vec4f(limited(v,12.)*pow(.998,P.clock.x*60.),a.vel.w);output[i]=a;

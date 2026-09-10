@@ -142,7 +142,7 @@ for (const [x, y, z] of [
   let expected = 0;
   for (let i = 0; i < 50000; i++) {
     const s = shapes.subarray(i * 16, i * 16 + 16);
-    let b = Math.max(0, Math.min(1, (s[3] - 0.15) / 1.05));
+    let b = Math.max(0, Math.min(1, (s[11] - 0.15) / 1.05));
     b = b * b * (3 - 2 * b);
     const r = (0.1 + 0.09 * b) * scale;
     const d = p.map((v, a) => (v - s[a]) / r);
@@ -150,7 +150,7 @@ for (const [x, y, z] of [
     for (let row = 0; row < 3; row++)
       for (let col = 0; col < 3; col++)
         r2 += d[row] * s[4 + col * 4 + row] * d[col];
-    if (r2 < 1) expected += (1 - r2) ** 3 * (1 + Math.max(0, 1 - s[3]) * 0.8);
+    if (r2 < 1) expected += (1 - r2) ** 3 * (1 + Math.max(0, 1 - s[11]) * 0.8);
   }
   const actual = density[x + 128 * (y + 160 * z)];
   assert.ok(

@@ -1,6 +1,8 @@
 import { common, neighbors, cachedNeighbors } from './common.ts';
 import { detailCommon } from './detail-shaders.ts';
 export const shapeCommon = /* wgsl */ `
+// Packed scalars: center.w=kernel radius, m0.w=amplitude, m1.w=raw rho.
+// The xyz columns retain the original anisotropic metric; m2.w is Z stretch.
 struct Shape {center:vec4f,m0:vec4f,m1:vec4f,m2:vec4f}
 const VMIN=vec3f(-2.08,-1.12,-1.56);const VMAX=vec3f(2.08,4.08,1.56);
 const VSIZE=vec3u(128,160,96);
@@ -48,7 +50,9 @@ export const volumeShaders: Record<string, string> = {
  let confidence=smoothstep(5.,14.,nearby)*smoothstep(.35,1.5,rho);
  cov=IDENTITY*(1.-confidence)+cov*confidence;cov=cov*(1./pow(max(determinant3(cov),1e-8),1./3.));
  let metric=inverse3(cov);let centre=p+limited(mean*.55*confidence,.025*P.clock.z);
- shapes[i]=Shape(vec4f(centre,rho),vec4f(metric[0],1.),vec4f(metric[1],sqrt(cov[1][1])),vec4f(metric[2],sqrt(cov[2][2])));
+ // Radius and amplitude are invariant across all voxels for this particle.
+ let radius=mix(.1,.19,smoothstep(.15,1.2,rho))*P.clock.z;
+ shapes[i]=Shape(vec4f(centre,radius),vec4f(metric[0],1.+max(0.,1.-rho)*.8),vec4f(metric[1],rho),vec4f(metric[2],sqrt(cov[2][2])));
  atomicMax(&bounds[0],bitcast<u32>(p.y+2.));
  }`,
   density:
@@ -79,10 +83,10 @@ export const volumeShaders: Record<string, string> = {
   for(var j=begin;j<end;j++){
    // Scale the entire kernel with particle resolution. A world-space .095
    // floor made sparse particles swell as quality increased (especially 50k).
-   let centre=shapes[j].center;let radius=mix(.1,.19,smoothstep(.15,1.2,centre.w))*P.clock.z;
+   let centre=shapes[j].center;let radius=centre.w;
    let diff=(p-centre.xyz)/radius;if(dot(diff,diff)>3.51){continue;}
    let metric=mat3x3f(shapes[j].m0.xyz,shapes[j].m1.xyz,shapes[j].m2.xyz);
-   let r2=dot(diff,metric*diff);if(r2<1.){let q=1.-r2;value+=shapes[j].m0.w*q*q*q*(1.+max(0.,1.-centre.w)*.8);}
+   let r2=dot(diff,metric*diff);if(r2<1.){let q=1.-r2;value+=q*q*q*shapes[j].m0.w;}
   }
  }}
  field[index]=value;
