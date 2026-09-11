@@ -29,7 +29,13 @@ struct VertexOut {@builtin(position) position:vec4f,@location(0) uv:vec2f}
 fn ray(uv:vec2f)->vec3f {var q=(uv-.5)*vec2f(S.view.x/S.view.y,1.);q.x+=S.view.z;return normalize(S.forward.xyz*1.55+S.right.xyz*q.x+S.up.xyz*q.y);}
 fn density(p:vec3f)->f32 {
  if(abs(p.x)>1.86||abs(p.z)>1.36||p.y<-.96||p.y>volumeTop){return 0.;}
- let node=clamp((p-VMIN)/(VMAX-VMIN)*(VSIZE-1.),vec3f(0.),VSIZE-1.);
+ // The solver's solid boundary is inset from the display wall. Continue only
+ // its boundary density across that guard band, rather than relying on large
+ // particle kernels to hide it. A dry solver boundary remains dry. Leave the
+ // free surface above the rim untouched, including detached airborne drops.
+ var sample=p;sample.y=max(sample.y,-.917);
+ if(p.y<.8){sample.x=clamp(sample.x,-1.78,1.78);sample.z=clamp(sample.z,-1.28,1.28);}
+ let node=clamp((sample-VMIN)/(VMAX-VMIN)*(VSIZE-1.),vec3f(0.),VSIZE-1.);
  ${
    filterable
      ? `return textureSampleLevel(densityVolume,densitySampler,(node+.5)/VSIZE,0.).r;`
