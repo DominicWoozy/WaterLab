@@ -1,3 +1,4 @@
+import { transmissionTrace } from './refraction-shaders.ts';
 import { receiverScene } from './light-space.ts';
 import { detailCommon } from './detail-shaders.ts';
 export function renderScene(filterable: boolean) {
@@ -87,10 +88,7 @@ fn duckShade(hit:vec4f,rd:vec3f)->vec3f {
  let visibility=clamp(max(illumination.r,max(illumination.g,illumination.b))/max(diffuse,.05),0.,1.);
  return color*(vec3f(.34)+illumination*.85*S.light.x)+vec3f(1.,.96,.82)*spec*S.light.x*.6*visibility+sky(reflect(rd,n))*(.025+.16*facing);
 }
-fn opticalPath(p:vec3f,r:vec3f)->f32 {
- let hit=boxHit(p,r);let end=duckTrace(p,r,max(0.,hit.y)).x;let stepSize=end/72.;var result=0.;
- for(var i=0;i<72;i++){let d=density(p+r*(f32(i)+.5)*stepSize);result+=smoothstep(S.config.x-.18,S.config.x+.18,d)*stepSize;}return result;
-}
+
 `
   );
 }
@@ -98,6 +96,7 @@ export function renderShader(filterable: boolean) {
   return (
     renderScene(filterable) +
     receiverScene +
+    transmissionTrace +
     /* wgsl */ `
 @group(0) @binding(12) var causticMap:texture_2d<f32>;
 @group(0) @binding(13) var causticSampler:sampler;
@@ -124,15 +123,15 @@ fn room(ro:vec3f,rd:vec3f)->vec3f {
 }
 fn scene(ro:vec3f,rd:vec3f)->vec3f {let floorT=(-.97-ro.y)/rd.y;let hit=duckTrace(ro,rd,select(1e5,floorT,floorT>0.));if(hit.y>=0.){return duckShade(hit,rd);}return room(ro,rd);}
 fn waterColor(p:vec3f,n:vec3f,rd:vec3f,detailId:u32)->vec3f {
-  let refracted=refract(rd,n,1./1.333);var exitPoint=p+refracted*.003;var exitRay=refracted;var thickness=0.;
-  if(detailId>0u){
-   let d=details[detailId-1u];let chord=detailRoots(d,p+refracted*.00001,refracted);let distance=max(0.,chord.y);
-   thickness=distance;exitPoint=p+refracted*(distance+.00002);
-   {let exitNormal=normalize(detailMetric(d)*(exitPoint-d.center.xyz));let outside=refract(refracted,-exitNormal,1.333);if(dot(outside,outside)>.1){exitRay=normalize(outside);}}
-  }
-  thickness+=opticalPath(exitPoint,exitRay);let absorb=exp(-vec3f(1.25,.2,.065)*thickness);
-  var samplePoint=exitPoint;if(detailId==0u){samplePoint=p+refracted*.006;}
-  var transmission=scene(samplePoint,exitRay)*absorb;transmission+=vec3f(.012,.11,.13)*(1.-absorb)*S.light.x*.45;var color=transmission;
+  let refracted=refract(rd,n,1./1.333);
+  let bias=select(.0005,.00002,detailId>0u);
+  let path=traceTransmission(p-n*bias,refracted,true,detailId);
+  let absorb=exp(-vec3f(1.25,.2,.065)*path.distance);
+  var background=scene(path.origin,path.direction);
+  // A bounded unresolved internal path must not leak straight through water.
+  if(path.complete==0u){background=sky(path.direction);}
+  var transmission=background*absorb*path.weight;
+  transmission+=vec3f(.012,.11,.13)*(1.-absorb)*S.light.x*.45;var color=transmission;
   if(S.light.y>.5){let fresnel=.0204+.9796*pow(1.-max(dot(-rd,n),0.),5.);let reflected=reflect(rd,n);let mirrorDuck=duckTrace(p+reflected*.006,reflected,1e5);var reflection=sky(reflected);if(mirrorDuck.y>=0.){reflection=duckShade(mirrorDuck,reflected);}color=mix(transmission,reflection,fresnel);
   let sun=normalize(vec3f(-.6,1.,.35));color+=vec3f(1.,.97,.9)*pow(max(dot(reflect(rd,n),sun),0.),240.)*S.light.x;}
  return color;

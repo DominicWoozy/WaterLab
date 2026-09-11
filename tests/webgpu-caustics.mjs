@@ -71,7 +71,7 @@ const code =
  if(row==1u){return vec4f(room(floor+vec3f(.3,1.,.1),normalize(vec3f(-.3,-1.,-.1))),1.);}
  if(row==2u){return vec4f(room(vec3f(x,.3,.1),-down),1.);}
  if(row==3u){return vec4f(waterColor(vec3f(x,0.,.1),-down,down,0u),1.);}
- if(row==4u){return vec4f(opticalPath(vec3f(x,-.003,.1),down),0.,0.,1.);}
+ if(row==4u){let path=traceTransmission(vec3f(x,-.0005,.1),down,true,0u);return vec4f(path.distance,path.weight,0.,1.);}
  if(row==5u){return vec4f(scene(vec3f(0.,2.,0.),down),duckTrace(vec3f(0.,2.,0.),down,2.97).y);}
  if(row==6u){return vec4f(waterColor(vec3f(1.75,0.,0.),-down,normalize(vec3f(1.,-.1,0.)),0u),1.);}
  return vec4f(floorLighting(floor),1.);
@@ -212,8 +212,21 @@ for (let x = 0; x < 12; x++)
   for (let k = 0; k < 3; k++) {
     const floorDelta = on[x * 4 + k] - off[x * 4 + k];
     const thickness = on[(4 * 64 + x) * 4];
+    assert.ok(
+      Math.abs(thickness - 0.9595) < 0.001,
+      'solid field ends at density clipping plane y=-.96',
+    );
+    assert.ok(
+      Math.abs(
+        on[(4 * 64 + x) * 4 + 1] - (1 - ((1.333 - 1) / (1.333 + 1)) ** 2),
+      ) < 1e-5,
+      'normal-incidence exit Fresnel',
+    );
     const expected =
-      floorDelta * Math.exp(-[1.25, 0.2, 0.065][k] * thickness) * (1 - 0.0204);
+      floorDelta *
+      Math.exp(-[1.25, 0.2, 0.065][k] * thickness) *
+      on[(4 * 64 + x) * 4 + 1] *
+      (1 - 0.0204);
     const actual = on[(3 * 64 + x) * 4 + k] - off[(3 * 64 + x) * 4 + k];
     assert.ok(
       Math.abs(actual - expected) < 2e-5,

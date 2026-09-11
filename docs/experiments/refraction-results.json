@@ -1,0 +1,95 @@
+{
+  "calm": {
+    "comparison": "exit-interface refraction (on = updated, off = baseline)",
+    "features": ["float32-filterable", "timestamp-query"],
+    "particles": 50000,
+    "scene": "calm",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 31.6145664,
+        "p50": 32.571392,
+        "p95": 35.979264
+      },
+      "off": {
+        "mean": 28.56058880000001,
+        "p50": 28.377088,
+        "p95": 34.4064
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 3.5345749333333334,
+        "p50": 3.211264
+      },
+      "off": {
+        "mean": 1.2866901333333336,
+        "p50": 1.179648
+      }
+    },
+    "errors": []
+  },
+  "rough": {
+    "comparison": "exit-interface refraction (on = updated, off = baseline)",
+    "features": ["float32-filterable", "timestamp-query"],
+    "particles": 50000,
+    "scene": "rough",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 34.84767573333333,
+        "p50": 35.323904,
+        "p95": 39.3216
+      },
+      "off": {
+        "mean": 30.843426133333335,
+        "p50": 31.522816,
+        "p95": 34.144256
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 6.413789866666665,
+        "p50": 5.57056
+      },
+      "off": {
+        "mean": 2.6935296,
+        "p50": 2.490368
+      }
+    },
+    "errors": []
+  },
+  "manual_calm": {
+    "comparison": "exit-interface refraction (on = updated, off = baseline)",
+    "features": ["timestamp-query"],
+    "particles": 50000,
+    "scene": "calm",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 26.028714666666662,
+        "p50": 25.55904,
+        "p95": 30.343168
+      },
+      "off": {
+        "mean": 22.515985066666662,
+        "p50": 22.216704,
+        "p95": 24.510464
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 6.9206016,
+        "p50": 6.488064
+      },
+      "off": {
+        "mean": 3.307383466666667,
+        "p50": 3.211264
+      }
+    },
+    "errors": []
+  }
+}
