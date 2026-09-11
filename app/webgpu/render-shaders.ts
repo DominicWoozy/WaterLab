@@ -1,6 +1,7 @@
 import { transmissionTrace } from './refraction-shaders.ts';
 import { receiverScene } from './light-space.ts';
 import { detailCommon } from './detail-shaders.ts';
+import { selfOpticsCommon, selfOpticsWater } from './self-optics-shaders.ts';
 export function renderScene(filterable: boolean) {
   return (
     detailCommon +
@@ -98,11 +99,12 @@ fn duckShade(hit:vec4f,rd:vec3f)->vec3f {
 `
   );
 }
-export function renderShader(filterable: boolean) {
+export function renderShader(filterable: boolean, selfOptics = false) {
   return (
     renderScene(filterable) +
     receiverScene +
     transmissionTrace +
+    (selfOptics ? selfOpticsCommon : '') +
     /* wgsl */ `
 @group(0) @binding(12) var causticMap:texture_2d<f32>;
 @group(0) @binding(13) var causticSampler:sampler;
@@ -128,7 +130,7 @@ fn room(ro:vec3f,rd:vec3f)->vec3f {
  return c;
 }
 fn scene(ro:vec3f,rd:vec3f)->vec3f {let floorT=(-.97-ro.y)/rd.y;let hit=duckTrace(ro,rd,select(1e5,floorT,floorT>0.));if(hit.y>=0.){return duckShade(hit,rd);}return room(ro,rd);}
-fn waterColor(p:vec3f,n:vec3f,rd:vec3f,detailId:u32)->vec3f {
+fn ${selfOptics ? 'baseWaterColor' : 'waterColor'}(p:vec3f,n:vec3f,rd:vec3f,detailId:u32${selfOptics ? ',reflection:vec3f,visibility:vec3f' : ''})->vec3f {
   let refracted=refract(rd,n,1./1.333);
   let bias=select(.0005,.00002,detailId>0u);
   let path=traceTransmission(p-n*bias,refracted,true,detailId);
@@ -136,11 +138,12 @@ fn waterColor(p:vec3f,n:vec3f,rd:vec3f,detailId:u32)->vec3f {
   var background=vec3f(0.);
   if(path.complete==0u){background=sky(path.direction);}else{background=scene(path.origin,path.direction);}
   var transmission=background*absorb*path.weight;
-  transmission+=vec3f(.012,.11,.13)*(1.-absorb)*S.light.x*.45;var color=transmission;
-  if(S.light.y>.5){let fresnel=.0204+.9796*pow(1.-max(dot(-rd,n),0.),5.);let reflected=reflect(rd,n);let mirrorDuck=duckTrace(p+reflected*.006,reflected,1e5);var reflection=sky(reflected);if(mirrorDuck.y>=0.){reflection=duckShade(mirrorDuck,reflected);}color=mix(transmission,reflection,fresnel);
-  let sun=normalize(vec3f(-.6,1.,.35));color+=vec3f(1.,.97,.9)*pow(max(dot(reflect(rd,n),sun),0.),240.)*S.light.x;}
+  transmission+=vec3f(.012,.11,.13)*(1.-absorb)*S.light.x*.45${selfOptics ? '*visibility' : ''};var color=transmission;
+  if(S.light.y>.5){let fresnel=.0204+.9796*pow(1.-max(dot(-rd,n),0.),5.);${selfOptics ? '' : 'let reflected=reflect(rd,n);let mirrorDuck=duckTrace(p+reflected*.006,reflected,1e5);var reflection=sky(reflected);if(mirrorDuck.y>=0.){reflection=duckShade(mirrorDuck,reflected);}'}color=mix(transmission,reflection,fresnel);
+  let sun=normalize(vec3f(-.6,1.,.35));color+=vec3f(1.,.97,.9)*pow(max(dot(reflect(rd,n),sun),0.),240.)*S.light.x${selfOptics ? '*visibility' : ''};}
  return color;
 }
+${selfOptics ? selfOpticsWater : ''}
 struct FragmentOut {@location(0) color:vec4f,@builtin(frag_depth) depth:f32}
 @fragment fn fragment(in:VertexOut)->FragmentOut {
  volumeTop=bitcast<f32>(bounds[0])-2.+.36;let rd=ray(in.uv);let floorT=(-.97-S.eye.y)/rd.y;

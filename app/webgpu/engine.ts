@@ -267,6 +267,8 @@ export async function createWebGPUWater(
         {
           light: s.light,
           reflection: s.reflection,
+          selfReflection: s.selfReflection,
+          selfShadow: s.selfShadow,
           caustics: s.caustics,
           particles: s.particles,
           brush: pointer && !pointer.orbit ? [...pointer.world, 1] : undefined,

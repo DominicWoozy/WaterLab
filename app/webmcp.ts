@@ -41,6 +41,8 @@ export function registerWaterTools(
           surfaceTension: { type: 'boolean' },
           light: { type: 'number', minimum: 0.2, maximum: 2.5 },
           reflection: { type: 'boolean' },
+          selfReflection: { type: 'boolean' },
+          selfShadow: { type: 'boolean' },
           caustics: { type: 'boolean' },
           paused: { type: 'boolean' },
         },
@@ -72,6 +74,8 @@ export function registerWaterTools(
           } else if (
             [
               'reflection',
+              'selfReflection',
+              'selfShadow',
               'caustics',
               'paused',
               'particles',

@@ -14,6 +14,7 @@ export class WebGPURenderer {
   readonly uniform: GPUBuffer;
   private caustics!: WebGPUCaustics;
   private surface!: GPURenderPipeline;
+  private selfOpticsSurface!: GPURenderPipeline;
   private particles!: GPURenderPipeline;
   private detailPipeline!: GPURenderPipeline;
   private detailLayout: GPUBindGroupLayout;
@@ -134,6 +135,12 @@ export class WebGPURenderer {
           r.surfaceLayout,
           'always',
         ],
+        [
+          'selfOpticsSurface',
+          renderShader(device.features.has('float32-filterable'), true),
+          r.surfaceLayout,
+          'always',
+        ],
         ['particles', particlesShader, r.particleLayout, 'less'],
         ['detailPipeline', detailShader, r.detailLayout, 'less'],
       ] as const) {
@@ -237,6 +244,8 @@ export class WebGPURenderer {
     options: {
       light: number;
       reflection: boolean;
+      selfReflection?: boolean;
+      selfShadow?: boolean;
       caustics: boolean;
       particles: boolean;
       brush?: number[];
@@ -282,8 +291,8 @@ export class WebGPURenderer {
     }
     const u = new Float32Array(32);
     u.set([...camera.eye, +volume.detailsEnabled], 0);
-    u.set([...camera.forward, 0], 4);
-    u.set([...camera.right, 0], 8);
+    u.set([...camera.forward, +(options.selfReflection ?? false)], 4);
+    u.set([...camera.right, +(options.selfShadow ?? false)], 8);
     u.set([...camera.up, 0], 12);
     u.set([width, height, width / height > 1.18 ? 0.19 : 0, sim.time], 16);
     u.set(
@@ -379,7 +388,12 @@ export class WebGPURenderer {
         depthClearValue: 1,
       },
     });
-    pass.setPipeline(this.surface);
+    pass.setPipeline(
+      !options.particles &&
+        (options.selfShadow || (options.reflection && options.selfReflection))
+        ? this.selfOpticsSurface
+        : this.surface,
+    );
     pass.setBindGroup(0, surface);
     pass.draw(3);
     if (options.particles) {

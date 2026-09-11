@@ -1,0 +1,305 @@
+[
+  {
+    "comparison": "optional self optics (on = enabled, off = original)",
+    "effect": "reflection",
+    "features": [
+      "float32-filterable",
+      "timestamp-query"
+    ],
+    "particles": 50000,
+    "scene": "rough",
+    "resolution": [
+      1250,
+      800
+    ],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 29.401322057142853,
+        "p50": 29.294592,
+        "p95": 31.850496
+      },
+      "off": {
+        "mean": 25.648917942857143,
+        "p50": 25.690112,
+        "p95": 27.459584
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 7.980412342857145,
+        "p50": 7.667712
+      },
+      "off": {
+        "mean": 4.265457371428573,
+        "p50": 4.194304
+      }
+    },
+    "errors": []
+  },
+  {
+    "comparison": "optional self optics (on = enabled, off = original)",
+    "effect": "shadow",
+    "features": [
+      "float32-filterable",
+      "timestamp-query"
+    ],
+    "particles": 50000,
+    "scene": "rough",
+    "resolution": [
+      1250,
+      800
+    ],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 24.38875428571428,
+        "p50": 24.24832,
+        "p95": 26.017792
+      },
+      "off": {
+        "mean": 23.444099657142857,
+        "p50": 23.199744,
+        "p95": 25.23136
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 5.1895149714285695,
+        "p50": 5.111808
+      },
+      "off": {
+        "mean": 4.188686628571428,
+        "p50": 4.063232
+      }
+    },
+    "errors": []
+  },
+  {
+    "comparison": "optional self optics (on = enabled, off = original)",
+    "effect": "both",
+    "features": [
+      "float32-filterable",
+      "timestamp-query"
+    ],
+    "particles": 50000,
+    "scene": "rough",
+    "resolution": [
+      1250,
+      800
+    ],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 29.39851337142857,
+        "p50": 28.704768,
+        "p95": 34.865152
+      },
+      "off": {
+        "mean": 22.378671542857138,
+        "p50": 22.347776,
+        "p95": 23.134208
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 10.9510656,
+        "p50": 10.289152
+      },
+      "off": {
+        "mean": 3.961183085714285,
+        "p50": 3.866624
+      }
+    },
+    "errors": []
+  },
+  {
+    "comparison": "optional self optics (on = enabled, off = original)",
+    "effect": "reflection",
+    "features": [
+      "float32-filterable",
+      "timestamp-query"
+    ],
+    "particles": 100000,
+    "scene": "rough",
+    "resolution": [
+      1250,
+      800
+    ],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 71.19082057142859,
+        "p50": 67.043328,
+        "p95": 92.471296
+      },
+      "off": {
+        "mean": 66.17825280000001,
+        "p50": 63.045632,
+        "p95": 84.803584
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 9.70026422857143,
+        "p50": 8.781824
+      },
+      "off": {
+        "mean": 4.663354514285715,
+        "p50": 4.521984
+      }
+    },
+    "errors": []
+  },
+  {
+    "comparison": "optional self optics (on = enabled, off = original)",
+    "effect": "shadow",
+    "features": [
+      "float32-filterable",
+      "timestamp-query"
+    ],
+    "particles": 100000,
+    "scene": "rough",
+    "resolution": [
+      1250,
+      800
+    ],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 75.6182454857143,
+        "p50": 72.024064,
+        "p95": 91.881472
+      },
+      "off": {
+        "mean": 74.15585645714289,
+        "p50": 69.926912,
+        "p95": 88.342528
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 6.4487424,
+        "p50": 6.094848
+      },
+      "off": {
+        "mean": 5.249433600000001,
+        "p50": 4.980736
+      }
+    },
+    "errors": []
+  },
+  {
+    "comparison": "optional self optics (on = enabled, off = original)",
+    "effect": "both",
+    "features": [
+      "float32-filterable",
+      "timestamp-query"
+    ],
+    "particles": 100000,
+    "scene": "rough",
+    "resolution": [
+      1250,
+      800
+    ],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 92.16140434285714,
+        "p50": 91.42272,
+        "p95": 101.974016
+      },
+      "off": {
+        "mean": 80.62145097142856,
+        "p50": 80.871424,
+        "p95": 87.81824
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 17.056212114285717,
+        "p50": 17.104896
+      },
+      "off": {
+        "mean": 5.00133302857143,
+        "p50": 4.784128
+      }
+    },
+    "errors": []
+  },
+  {
+    "comparison": "optional self optics (on = enabled, off = original)",
+    "effect": "both",
+    "features": [
+      "float32-filterable",
+      "timestamp-query"
+    ],
+    "particles": 50000,
+    "scene": "calm",
+    "resolution": [
+      1250,
+      800
+    ],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 29.58669531428572,
+        "p50": 29.884416,
+        "p95": 32.833536
+      },
+      "off": {
+        "mean": 27.1253504,
+        "p50": 27.394048,
+        "p95": 30.277632
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 4.12970422857143,
+        "p50": 4.063232
+      },
+      "off": {
+        "mean": 2.001656685714285,
+        "p50": 1.900544
+      }
+    },
+    "errors": []
+  },
+  {
+    "comparison": "optional self optics (on = enabled, off = original)",
+    "effect": "both",
+    "features": [
+      "timestamp-query"
+    ],
+    "particles": 50000,
+    "scene": "rough",
+    "resolution": [
+      1250,
+      800
+    ],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 49.57143039999999,
+        "p50": 48.234496,
+        "p95": 62.128128
+      },
+      "off": {
+        "mean": 32.867240228571404,
+        "p50": 31.326208,
+        "p95": 41.61536
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 25.944766171428572,
+        "p50": 24.707072
+      },
+      "off": {
+        "mean": 8.02816,
+        "p50": 7.53664
+      }
+    },
+    "errors": []
+  }
+]

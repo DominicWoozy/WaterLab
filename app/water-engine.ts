@@ -22,6 +22,8 @@ export type WaterSettings = {
   agitation: number;
   light: number;
   reflection: boolean;
+  selfReflection: boolean;
+  selfShadow: boolean;
   caustics: boolean;
   particles: boolean;
   details: boolean;
@@ -37,6 +39,8 @@ export const defaults: WaterSettings = {
   agitation: 0,
   light: 1.3,
   reflection: true,
+  selfReflection: false,
+  selfShadow: false,
   caustics: true,
   particles: false,
   details: true,

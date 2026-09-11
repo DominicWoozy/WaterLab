@@ -416,6 +416,35 @@ export default function Home() {
                   onCheckedChange={(v) => update('caustics', v)}
                 />
               </div>
+              <div className="toggle-row">
+                <label htmlFor="self-reflection">
+                  水体自反射
+                  <small>实验 · 反射其他浪花和水体，需开启环境反射</small>
+                </label>
+                <Switch
+                  id="self-reflection"
+                  checked={
+                    settings.selfReflection && stats.backend === 'WebGPU'
+                  }
+                  disabled={stats.backend !== 'WebGPU' || !settings.reflection}
+                  onCheckedChange={(v) => update('selfReflection', v)}
+                />
+              </div>
+              <div className="toggle-row">
+                <label htmlFor="self-shadow">
+                  水面自阴影
+                  <small>实验 · 上层水体透光衰减影响下层水面的光照</small>
+                </label>
+                <Switch
+                  id="self-shadow"
+                  checked={settings.selfShadow && stats.backend === 'WebGPU'}
+                  disabled={stats.backend !== 'WebGPU'}
+                  onCheckedChange={(v) => update('selfShadow', v)}
+                />
+              </div>
+              <p className="light-note">
+                两项实验默认关闭，可分别开启对比帧率。适合高性能设备；自反射限一层，自阴影采用透光近似。
+              </p>
               <p className="light-note">
                 粒子运动与水体重建均在 GPU
                 计算。薄水透明，深水随光程逐渐呈青蓝色。
