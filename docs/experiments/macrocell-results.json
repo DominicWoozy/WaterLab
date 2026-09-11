@@ -1,0 +1,219 @@
+{
+  "secondary_calm": {
+    "comparison": "conservative macrocell skipping including cache build (on = accelerated)",
+    "features": ["float32-filterable", "timestamp-query"],
+    "particles": 50000,
+    "scene": "calm",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 21.810380800000004,
+        "p50": 21.757952,
+        "p95": 22.675456
+      },
+      "off": {
+        "mean": 21.705523200000002,
+        "p50": 21.757952,
+        "p95": 22.544384
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 2.2151168,
+        "p50": 2.162688
+      },
+      "off": {
+        "mean": 2.0774912,
+        "p50": 2.031616
+      }
+    },
+    "errors": []
+  },
+  "primary_rough": {
+    "comparison": "conservative macrocell skipping including cache build (on = accelerated)",
+    "features": ["float32-filterable", "timestamp-query"],
+    "particles": 50000,
+    "scene": "rough",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 27.0139392,
+        "p50": 27.000832,
+        "p95": 29.81888
+      },
+      "off": {
+        "mean": 26.028714666666666,
+        "p50": 25.88672,
+        "p95": 27.983872
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 5.542161066666667,
+        "p50": 5.24288
+      },
+      "off": {
+        "mean": 4.583150933333333,
+        "p50": 4.390912
+      }
+    },
+    "errors": []
+  },
+  "manual_rough": {
+    "comparison": "conservative macrocell skipping including cache build (on = accelerated)",
+    "features": ["timestamp-query"],
+    "particles": 50000,
+    "scene": "rough",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 32.28084906666667,
+        "p50": 30.867456,
+        "p95": 41.418752
+      },
+      "off": {
+        "mean": 33.678950400000005,
+        "p50": 32.833536,
+        "p95": 42.5984
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 8.497834666666666,
+        "p50": 7.995392
+      },
+      "off": {
+        "mean": 10.169002666666668,
+        "p50": 9.633792
+      }
+    },
+    "errors": []
+  },
+  "exact_manual": {
+    "comparison": "conservative macrocell skipping including cache build (on = accelerated)",
+    "features": ["timestamp-query"],
+    "particles": 50000,
+    "scene": "rough",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 42.58966186666667,
+        "p50": 42.5984,
+        "p95": 47.710208
+      },
+      "off": {
+        "mean": 43.7649408,
+        "p50": 43.515904,
+        "p95": 49.217536
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 10.544742399999997,
+        "p50": 10.944512
+      },
+      "off": {
+        "mean": 10.682367999999999,
+        "p50": 9.240576
+      }
+    },
+    "errors": []
+  },
+  "macrocell8": {
+    "comparison": "conservative macrocell skipping including cache build (on = accelerated)",
+    "features": ["float32-filterable", "timestamp-query"],
+    "particles": 50000,
+    "scene": "rough",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 24.414344533333338,
+        "p50": 24.444928,
+        "p95": 25.493504
+      },
+      "off": {
+        "mean": 23.501209599999992,
+        "p50": 23.330816,
+        "p95": 24.772608
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 4.971997866666668,
+        "p50": 4.980736
+      },
+      "off": {
+        "mean": 4.1178453333333325,
+        "p50": 4.063232
+      }
+    },
+    "errors": []
+  },
+  "incremental_dda": {
+    "comparison": "conservative macrocell skipping including cache build (on = accelerated)",
+    "features": ["float32-filterable", "timestamp-query"],
+    "particles": 50000,
+    "scene": "rough",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 25.727249066666666,
+        "p50": 25.296896,
+        "p95": 30.081024
+      },
+      "off": {
+        "mean": 24.2745344,
+        "p50": 23.789568,
+        "p95": 27.721728
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 5.861102933333331,
+        "p50": 5.89824
+      },
+      "off": {
+        "mean": 4.430233599999999,
+        "p50": 4.456448
+      }
+    },
+    "errors": []
+  },
+  "cached_receiver": {
+    "comparison": "cached terminal receiver intersection",
+    "features": ["float32-filterable", "timestamp-query"],
+    "particles": 50000,
+    "scene": "rough",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 38.71429973333333,
+        "p50": 39.911424,
+        "p95": 47.316992
+      },
+      "off": {
+        "mean": 37.50625279999999,
+        "p50": 37.748736,
+        "p95": 43.712512
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 6.0489728000000005,
+        "p50": 4.980736
+      },
+      "off": {
+        "mean": 5.142391466666666,
+        "p50": 4.58752
+      }
+    },
+    "errors": []
+  }
+}

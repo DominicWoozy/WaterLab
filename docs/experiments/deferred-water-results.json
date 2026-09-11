@@ -1,0 +1,64 @@
+{
+  "calm": {
+    "comparison": "deferred opaque and transmitted background shading",
+    "features": ["float32-filterable", "timestamp-query"],
+    "particles": 50000,
+    "scene": "calm",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 28.66127592727272,
+        "p50": 28.377088,
+        "p95": 31.719424
+      },
+      "off": {
+        "mean": 28.891247709090905,
+        "p50": 28.704768,
+        "p95": 31.916032
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 2.0208919272727273,
+        "p50": 1.900544
+      },
+      "off": {
+        "mean": 2.1787741090909103,
+        "p50": 1.96608
+      }
+    },
+    "errors": []
+  },
+  "rough": {
+    "comparison": "deferred opaque and transmitted background shading",
+    "features": ["float32-filterable", "timestamp-query"],
+    "particles": 50000,
+    "scene": "rough",
+    "resolution": [1250, 800],
+    "split": true,
+    "gpu_command_span_ms": {
+      "on": {
+        "mean": 22.900661527272735,
+        "p50": 22.806528,
+        "p95": 24.182784
+      },
+      "off": {
+        "mean": 22.949515636363632,
+        "p50": 22.806528,
+        "p95": 24.24832
+      }
+    },
+    "surface_pass_ms": {
+      "on": {
+        "mean": 4.237796072727275,
+        "p50": 4.128768
+      },
+      "off": {
+        "mean": 4.32180130909091,
+        "p50": 4.325376
+      }
+    },
+    "errors": []
+  }
+}

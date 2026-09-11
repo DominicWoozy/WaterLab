@@ -127,9 +127,8 @@ fn waterColor(p:vec3f,n:vec3f,rd:vec3f,detailId:u32)->vec3f {
   let bias=select(.0005,.00002,detailId>0u);
   let path=traceTransmission(p-n*bias,refracted,true,detailId);
   let absorb=exp(-vec3f(1.25,.2,.065)*path.distance);
-  var background=scene(path.origin,path.direction);
-  // A bounded unresolved internal path must not leak straight through water.
-  if(path.complete==0u){background=sky(path.direction);}
+  var background=vec3f(0.);
+  if(path.complete==0u){background=sky(path.direction);}else{background=scene(path.origin,path.direction);}
   var transmission=background*absorb*path.weight;
   transmission+=vec3f(.012,.11,.13)*(1.-absorb)*S.light.x*.45;var color=transmission;
   if(S.light.y>.5){let fresnel=.0204+.9796*pow(1.-max(dot(-rd,n),0.),5.);let reflected=reflect(rd,n);let mirrorDuck=duckTrace(p+reflected*.006,reflected,1e5);var reflection=sky(reflected);if(mirrorDuck.y>=0.){reflection=duckShade(mirrorDuck,reflected);}color=mix(transmission,reflection,fresnel);
@@ -139,14 +138,14 @@ fn waterColor(p:vec3f,n:vec3f,rd:vec3f,detailId:u32)->vec3f {
 struct FragmentOut {@location(0) color:vec4f,@builtin(frag_depth) depth:f32}
 @fragment fn fragment(in:VertexOut)->FragmentOut {
  volumeTop=bitcast<f32>(bounds[0])-2.+.36;let rd=ray(in.uv);let floorT=(-.97-S.eye.y)/rd.y;
- let primaryDuck=duckTrace(S.eye.xyz,rd,select(1e5,floorT,floorT>0.));var color=room(S.eye.xyz,rd);if(primaryDuck.y>=0.){color=duckShade(primaryDuck,rd);}
+ let primaryDuck=duckTrace(S.eye.xyz,rd,select(1e5,floorT,floorT>0.));var color=vec3f(0.);
  var interval=boxHit(S.eye.xyz,rd);interval.y=min(interval.y,primaryDuck.x);var at=max(0.,interval.x);var last=at;var found=false;
  if(S.light.w<.5&&interval.y>at){for(var i=0;i<384;i++){let d=density(S.eye.xyz+rd*at);if(d>S.config.x){found=true;break;}last=at;at+=select(.026,.014,d>.12);if(at>interval.y){break;}}}
  if(found){
   for(var i=0;i<7;i++){let mid=(at+last)*.5;if(density(S.eye.xyz+rd*mid)>S.config.x){at=mid;}else{last=mid;}}
   let p=S.eye.xyz+rd*at;var n=normalAt(p);if(dot(n,rd)>0.){n=-n;}
   color=waterColor(p,n,rd,0u);
- }
+ }else{if(primaryDuck.y>=0.){color=duckShade(primaryDuck,rd);}else{color=room(S.eye.xyz,rd);}}
  if(S.eye.w>.5&&S.light.w<.5){
   let pixel=vec2i(in.position.xy);let hit=textureLoad(detailHits,pixel,0);
   if(hit.y>.5&&hit.x<primaryDuck.x&&(!found||hit.x<at)){

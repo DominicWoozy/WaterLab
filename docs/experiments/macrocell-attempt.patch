@@ -1,0 +1,227 @@
+diff --git a/app/webgpu/refraction-shaders.ts b/app/webgpu/refraction-shaders.ts
+index 798f72f..dcd174c 100644
+--- a/app/webgpu/refraction-shaders.ts
++++ b/app/webgpu/refraction-shaders.ts
+@@ -25,7 +25,7 @@ fn tankContact(p:vec3f,rd:vec3f)->u32 {
+ fn traceTransmission(start:vec3f,direction:vec3f,startInside:bool,detailId:u32)->WaterPath {
+  var ro=start;var rd=direction;var inside=startInside;var analytic=detailId;
+  var path=0.;var weight=1.;var events=0u;var at=0.;
+- var end=0.;var refresh=true;
++ var end=0.;var refresh=true;var regionEnd=-1.;var uniformRegion=false;var grid:DensityGrid;
+  // Fixed spatial steps retain resolved thin features; a global budget bounds
+  // worst-case work even for repeated crossings or total internal reflection.
+  for(var sample=0;sample<256;sample++){
+@@ -33,7 +33,7 @@ fn traceTransmission(start:vec3f,direction:vec3f,startInside:bool,detailId:u32)-
+    end=max(0.,boxHit(ro,rd).y);
+    end=min(end,lightReceiver(ro,rd).x);
+    end=min(end,duckTrace(ro,rd,end).x);
+-   at=0.;refresh=false;
++   at=0.;refresh=false;regionEnd=-1.;
+   }
+   if(analytic>0u){
+    let d=details[analytic-1u];let roots=detailRoots(d,ro,rd);let length=max(0.,roots.y);
+@@ -52,6 +52,20 @@ fn traceTransmission(start:vec3f,direction:vec3f,startInside:bool,detailId:u32)-
+   }
+   if(at>=end){return WaterPath(ro,rd,path,weight,events,1u);}
+   let stepSize=select(.026,.018,inside);
++  if(at>=regionEnd){
++   if(regionEnd<0.){grid=beginDensityGrid(ro,rd,at);}else{grid=advanceDensityGrid(grid,at);}
++   let region=gridRegion(grid,at,inside,S.config.x);
++   regionEnd=region.x;uniformRegion=region.y>.5;
++  }
++  if(uniformRegion){
++   // Preserve the fine-step lattice and the original logical step budget.
++   let skipped=min(floor(max(0.,min(regionEnd,end)-at-.0001)/stepSize),f32(255-sample));
++   if(skipped>=2.){
++    // Match the reference's floating-point additions, including absorption.
++    for(var j=0;j<i32(skipped);j++){let next=at+stepSize;if(inside){path+=next-at;}at=next;}
++    sample+=i32(skipped);
++   }
++  }
+   let next=min(end,at+stepSize);
+   let value=density(ro+rd*next);let nextInside=value>S.config.x;
+   if(nextInside!=inside){
+diff --git a/app/webgpu/render-shaders.ts b/app/webgpu/render-shaders.ts
+index c3e1604..56c2691 100644
+--- a/app/webgpu/render-shaders.ts
++++ b/app/webgpu/render-shaders.ts
+@@ -1,3 +1,4 @@
++import { macrocellTraversal } from './macrocell-shaders.ts';
+ import { transmissionTrace } from './refraction-shaders.ts';
+ import { receiverScene } from './light-space.ts';
+ import { detailCommon } from './detail-shaders.ts';
+@@ -92,10 +93,11 @@ fn duckShade(hit:vec4f,rd:vec3f)->vec3f {
+ `
+   );
+ }
+-export function renderShader(filterable: boolean) {
++export function renderShader(filterable: boolean, macroSkipping = true) {
+   return (
+     renderScene(filterable) +
+     receiverScene +
++    macrocellTraversal(macroSkipping) +
+     transmissionTrace +
+     /* wgsl */ `
+ @group(0) @binding(12) var causticMap:texture_2d<f32>;
+@@ -141,7 +143,16 @@ struct FragmentOut {@location(0) color:vec4f,@builtin(frag_depth) depth:f32}
+  volumeTop=bitcast<f32>(bounds[0])-2.+.36;let rd=ray(in.uv);let floorT=(-.97-S.eye.y)/rd.y;
+  let primaryDuck=duckTrace(S.eye.xyz,rd,select(1e5,floorT,floorT>0.));var color=room(S.eye.xyz,rd);if(primaryDuck.y>=0.){color=duckShade(primaryDuck,rd);}
+  var interval=boxHit(S.eye.xyz,rd);interval.y=min(interval.y,primaryDuck.x);var at=max(0.,interval.x);var last=at;var found=false;
+- if(S.light.w<.5&&interval.y>at){for(var i=0;i<384;i++){let d=density(S.eye.xyz+rd*at);if(d>S.config.x){found=true;break;}last=at;at+=select(.026,.014,d>.12);if(at>interval.y){break;}}}
++ var regionEnd=-1.;var emptyRegion=false;var primaryGrid:DensityGrid;
++ if(S.light.w<.5&&interval.y>at){for(var i=0;i<384;i++){
++  let p=S.eye.xyz+rd*at;let d=density(p);if(d>S.config.x){found=true;break;}
++  if(d<=.12){
++   if(at>=regionEnd){if(regionEnd<0.){primaryGrid=beginDensityGrid(S.eye.xyz,rd,at);}else{primaryGrid=advanceDensityGrid(primaryGrid,at);}
++   let region=gridRegion(primaryGrid,at,false,.12);regionEnd=region.x;emptyRegion=region.y>.5;}
++   if(emptyRegion){let skipped=min(floor(max(0.,min(regionEnd,interval.y)-at-.0001)/.026),f32(383-i));if(skipped>=2.){for(var j=0;j<i32(skipped);j++){at+=.026;}i+=i32(skipped);}}
++  }
++  last=at;at+=select(.026,.014,d>.12);if(at>interval.y){break;}
++ }}
+  if(found){
+   for(var i=0;i<7;i++){let mid=(at+last)*.5;if(density(S.eye.xyz+rd*mid)>S.config.x){at=mid;}else{last=mid;}}
+   let p=S.eye.xyz+rd*at;var n=normalAt(p);if(dot(n,rd)>0.){n=-n;}
+diff --git a/app/webgpu/renderer.ts b/app/webgpu/renderer.ts
+index 61668b8..025b372 100644
+--- a/app/webgpu/renderer.ts
++++ b/app/webgpu/renderer.ts
+@@ -102,6 +102,7 @@ export class WebGPURenderer {
+         { binding: 12, visibility: F, texture: { sampleType: 'float' } },
+         { binding: 13, visibility: F, sampler: { type: 'filtering' } },
+         { binding: 14, visibility: F, buffer: { type: 'read-only-storage' } },
++        { binding: 15, visibility: F, buffer: { type: 'read-only-storage' } },
+       ],
+     });
+     this.particleLayout = device.createBindGroupLayout({
+@@ -358,6 +359,7 @@ export class WebGPURenderer {
+           { binding: 12, resource: this.caustics.view },
+           { binding: 13, resource: this.albedoSampler },
+           { binding: 14, resource: { buffer: this.caustics.duckLighting } },
++          { binding: 15, resource: { buffer: volume.ranges } },
+         ],
+       });
+       this.surfaceGroups.set(sim.duck, surface);
+diff --git a/app/webgpu/volume.ts b/app/webgpu/volume.ts
+index e223afa..fef8103 100644
+--- a/app/webgpu/volume.ts
++++ b/app/webgpu/volume.ts
+@@ -1,8 +1,10 @@
+ import { buffer, ComputeKernel } from './compute.ts';
+ import { CAPACITY } from './common.ts';
++import { MACRO_COUNT, macrocellBuild } from './macrocell-shaders.ts';
+ import { volumeShaders } from './volume-shaders.ts';
+ import { RENDER_PARAMETER_SLOT, type WebGPUSimulation } from './simulation.ts';
+ export class WebGPUVolume {
++  readonly ranges: GPUBuffer;
+   readonly texture: GPUTexture;
+   readonly view: GPUTextureView;
+   readonly shapes: GPUBuffer;
+@@ -18,6 +20,7 @@ export class WebGPUVolume {
+   private kernels = new Map<string, ComputeKernel>();
+   private constructor(device: GPUDevice) {
+     this.device = device;
++    this.ranges = buffer(device, 'density macrocell ranges', (MACRO_COUNT + 1) * 8);
+     this.details = buffer(device, 'analytic water details', CAPACITY * 64);
+     this.detailDraw = buffer(
+       device,
+@@ -55,7 +58,7 @@ export class WebGPUVolume {
+   static async create(device: GPUDevice) {
+     const volume = new WebGPUVolume(device);
+     try {
+-      for (const [name, code] of Object.entries(volumeShaders))
++      for (const [name, code] of Object.entries({...volumeShaders, macrocellBuild}))
+         volume.kernels.set(
+           name,
+           await ComputeKernel.create(device, name, code),
+@@ -131,14 +134,21 @@ export class WebGPUVolume {
+           24,
+         );
+     pass.end();
++    this.encodeRanges(encoder);
+     encoder.copyBufferToTexture(
+       { buffer: this.temp, bytesPerRow: 512, rowsPerImage: 160 },
+       { texture: this.texture },
+       [128, 160, 96],
+     );
+   }
++  encodeRanges(encoder: GPUCommandEncoder) {
++    const pass = encoder.beginComputePass({label:'density range cache'});
++    this.kernels.get('macrocellBuild')!.dispatch(pass, {0:this.temp, 1:this.ranges}, 8, 10, 6);
++    pass.end();
++  }
+   destroy() {
+     [
++      this.ranges,
+       this.shapes,
+       this.bounds,
+       this.density,
+diff --git a/tests/webgpu-refraction.mjs b/tests/webgpu-refraction.mjs
+index 281a7d9..b06f6f4 100644
+--- a/tests/webgpu-refraction.mjs
++++ b/tests/webgpu-refraction.mjs
+@@ -15,6 +15,10 @@ device.addEventListener('uncapturederror', (e) => errors.push(e.error.message));
+ const code =
+   detailCommon +
+   `
++struct DensityGrid {unused:f32}
++fn beginDensityGrid(ro:vec3f,rd:vec3f,at:f32)->DensityGrid{return DensityGrid();}
++fn advanceDensityGrid(grid:DensityGrid,at:f32)->DensityGrid{return grid;}
++fn gridRegion(grid:DensityGrid,at:f32,inside:bool,threshold:f32)->vec2f{return vec2f(at,0.);}
+ struct Scene {config:vec4f}
+ var<private> S:Scene;
+ var<private> mode:u32;
+diff --git a/app/webgpu/macrocell-shaders.ts b/app/webgpu/macrocell-shaders.ts
+new file mode 100644
+index 0000000..1d8f44e
+--- /dev/null
++++ b/app/webgpu/macrocell-shaders.ts
+@@ -0,0 +1,49 @@
++// Conservative bounds of 4x4x4 trilinear cells (5x5x5 supporting nodes).
++export const MACRO_COUNT = 32 * 40 * 24;
++export const macrocellBuild = /* wgsl */ `
++@group(0) @binding(0) var<storage,read> field:array<f32>;
++@group(0) @binding(1) var<storage,read_write> ranges:array<vec2f>;
++@compute @workgroup_size(4,4,4) fn main(@builtin(global_invocation_id) id:vec3u){
++ if(any(id>=vec3u(32,40,24))){return;}
++ var low=1e30;var high=-1e30;
++ for(var z=0u;z<=4u;z++){for(var y=0u;y<=4u;y++){for(var x=0u;x<=4u;x++){
++  let at=min(id*4u+vec3u(x,y,z),vec3u(127,159,95));let d=field[at.x+128u*(at.y+160u*at.z)];
++  low=min(low,d);high=max(high,d);
++ }}}
++ let margin=1e-5*max(1.,max(abs(low),abs(high)));
++ ranges[1u+id.x+32u*(id.y+40u*id.z)]=vec2f(low-margin,high+margin);
++ if(all(id==vec3u(0))){ranges[0]=vec2f(1.,0.);}
++}
++`;
++export function macrocellTraversal(enabled=true){return /* wgsl */ `
++@group(0) @binding(15) var<storage,read> densityRanges:array<vec2f>;
++struct DensityGrid {cell:vec3i,step:vec3i,next:vec3f,delta:vec3f,enter:f32,leave:f32}
++fn beginDensityGrid(ro:vec3f,rd:vec3f,at:f32)->DensityGrid {
++ ${enabled ? '' : 'return DensityGrid(); /*'}
++ let unit=(VMAX-VMIN)/(VSIZE-1.)*4.;
++ let cell=vec3i(clamp(floor((ro+rd*at-VMIN)/unit),vec3f(0.),vec3f(31.,39.,23.)));
++ let step=select(vec3i(-1),vec3i(1),rd>=vec3f(0.));
++ let inv=1./select(vec3f(1e-8),rd,abs(rd)>vec3f(1e-8));
++ let face=VMIN+(vec3f(cell)+select(vec3f(0.),vec3f(1.),rd>=vec3f(0.)))*unit;
++ let next=select(vec3f(1e5),(face-ro)*inv,abs(rd)>vec3f(1e-8));
++ let a=(vec3f(-1.86,-.96,-1.36)-ro)*inv;let b=(vec3f(1.86,volumeTop,1.36)-ro)*inv;
++ let lo=min(a,b);let hi=max(a,b);
++ return DensityGrid(cell,step,next,abs(unit*inv),max(lo.x,max(lo.y,lo.z)),min(hi.x,min(hi.y,hi.z)));
++ ${enabled ? '' : '*/'}
++}
++fn advanceDensityGrid(input:DensityGrid,at:f32)->DensityGrid {
++ var grid=input;
++ // Fine steps are smaller than one macrocell along every axis.
++ for(var axis=0;axis<3;axis++){if(at>=grid.next[axis]){grid.cell[axis]+=grid.step[axis];grid.next[axis]+=grid.delta[axis];}}
++ return grid;
++}
++fn gridRegion(grid:DensityGrid,at:f32,inside:bool,threshold:f32)->vec2f {
++ ${enabled ? '' : 'return vec2f(at,0.); /*'}
++ if(densityRanges[0].x!=1. || any(grid.cell<vec3i(0)) || any(grid.cell>=vec3i(32,40,24))){return vec2f(at,0.);}
++ let end=min(grid.leave,min(grid.next.x,min(grid.next.y,grid.next.z)));
++ if(at<=grid.enter || at>=grid.leave){return vec2f(at,0.);}
++ let cell=vec3u(grid.cell);let span=densityRanges[1u+cell.x+32u*(cell.y+40u*cell.z)];
++ return vec2f(end,select(0.,1.,select((span.y<threshold),(span.x>threshold),inside)));
++ ${enabled ? '' : '*/'}
++}
++`;}
