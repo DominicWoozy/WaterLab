@@ -9,6 +9,19 @@ fn interfaceReflectance(cosine:f32,eta:f32)->f32 {
  let rp=(ci-eta*ct)/max(ci+eta*ct,1e-8);
  return .5*(rs*rs+rp*rp);
 }
+// These planes truncate the reconstructed field at the tank. They are not
+// free water/air interfaces. The sides are decorative transparent boundaries,
+// not a glass solid; the tile receiver is opaque. Keep the tolerance close to one
+// refinement interval, so a detached surface near a wall still refracts.
+fn tankContact(p:vec3f,rd:vec3f)->u32 {
+ let epsilon=.0003;
+ if(rd.y<0. && abs(p.y+.96)<epsilon){return 1u;}
+ if(p.y>=-.96-epsilon && p.y<.8){
+  if(p.x*rd.x>0. && abs(abs(p.x)-1.86)<epsilon){return 2u;}
+  if(p.z*rd.z>0. && abs(abs(p.z)-1.36)<epsilon){return 2u;}
+ }
+ return 0u;
+}
 fn traceTransmission(start:vec3f,direction:vec3f,startInside:bool,detailId:u32)->WaterPath {
  var ro=start;var rd=direction;var inside=startInside;var analytic=detailId;
  var path=0.;var weight=1.;var events=0u;var at=0.;
@@ -49,6 +62,15 @@ fn traceTransmission(start:vec3f,direction:vec3f,startInside:bool,detailId:u32)-
    }
    let hitDistance=(lo+hi)*.5;let hit=ro+rd*hitDistance;
    if(inside){path+=hitDistance-at;}
+   if(inside){
+    let contact=tankContact(hit,rd);
+    if(contact>0u){
+     // Close only the artificial bottom gap, stopping at the already tested
+     // nearest opaque receiver. Side transmission keeps the incoming segment.
+     if(contact==1u){path+=max(0.,end-hitDistance);}
+     return WaterPath(ro,rd,path,weight,events,1u);
+    }
+   }
    var face=normalAt(hit);if(dot(face,rd)>0.){face=-face;}
    let eta=select(1./1.333,1.333,inside);let outgoing=refract(rd,face,eta);events++;
    if(dot(outgoing,outgoing)<1e-8){rd=normalize(reflect(rd,face));ro=hit+face*.0005;}

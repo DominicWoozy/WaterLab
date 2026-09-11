@@ -22,6 +22,7 @@ var<private> mode:u32;
 @group(0) @binding(1) var<storage,read> queries:array<vec4f>;
 @group(0) @binding(2) var<storage,read_write> results:array<vec4f>;
 fn density(p:vec3f)->f32 {
+ if(mode>=7u){let gap=select(0.,.02,mode==8u);return select(0.,2.,abs(p.x)<1.86-gap && abs(p.z)<1.36-gap && p.y>-.96+gap && p.y<2.);}
  if(mode==6u){return select(0.,2.,dot(p,p)<.04);}
  if(mode>=5u){return 0.;}
  var bottom=-.2;
@@ -30,6 +31,7 @@ fn density(p:vec3f)->f32 {
  return select(0.,2.,(p.y<0. && p.y>bottom)||second);
 }
 fn normalAt(p:vec3f)->vec3f {
+ if(mode>=7u){let gap=select(0.,.02,mode==8u);if(abs(p.x)>1.85-gap){return vec3f(sign(p.x),0.,0.);}if(abs(p.z)>1.35-gap){return vec3f(0.,0.,sign(p.z));}return vec3f(0.,-1.,0.);}
  if(mode==6u){return normalize(p);}
  if(mode==2u && p.y<-.05){return normalize(vec3f(.25,-1.,0.));}
  if(abs(p.y)<.01 || abs(p.y+.3)<.01){return vec3f(0.,1.,0.);}
@@ -40,7 +42,7 @@ fn boxHit(ro:vec3f,rd:vec3f)->vec2f {
  let a=(vec3f(-2.,-1.,-2.)-ro)/safe;let b=(vec3f(2.,1.,2.)-ro)/safe;
  return vec2f(max(max(min(a,b).x,min(a,b).y),min(a,b).z),min(min(max(a,b).x,max(a,b).y),max(a,b).z));
 }
-fn lightReceiver(ro:vec3f,rd:vec3f)->vec2f {return vec2f(1e5,0.);}
+fn lightReceiver(ro:vec3f,rd:vec3f)->vec2f {if(mode>=7u && rd.y<0.){return vec2f((-.97-ro.y)/rd.y,1.);}return vec2f(1e5,0.);}
 fn duckTrace(ro:vec3f,rd:vec3f,end:f32)->vec4f {
  if(mode==3u && rd.y<0.){return vec4f(min(end,(-.1-ro.y)/rd.y),0.,0.,0.);}
  return vec4f(end,-1.,0.,0.);
@@ -104,6 +106,57 @@ const fixtures = [
     d: dropDirection,
   },
 ];
+const contactStart = fixtures.length;
+fixtures.push(
+  {
+    name: 'tank right contact at TIR angle',
+    mode: 7,
+    p: [1.8, -0.3, 0],
+    d: [0.5, -0.5, Math.sqrt(0.5)],
+  },
+  {
+    name: 'tank left contact at TIR angle',
+    mode: 7,
+    p: [-1.8, -0.3, 0],
+    d: [-0.5, -0.5, Math.sqrt(0.5)],
+  },
+  {
+    name: 'tank front contact at TIR angle',
+    mode: 7,
+    p: [0, -0.3, 1.3],
+    d: [Math.sqrt(0.5), -0.5, 0.5],
+  },
+  {
+    name: 'tank back contact at TIR angle',
+    mode: 7,
+    p: [0, -0.3, -1.3],
+    d: [Math.sqrt(0.5), -0.5, -0.5],
+  },
+  {
+    name: 'tank floor contact at TIR angle',
+    mode: 7,
+    p: [0, -0.9, 0],
+    d: [Math.sqrt(0.75), -0.5, 0],
+  },
+  {
+    name: 'detached surface close to wall',
+    mode: 8,
+    p: [1.78, -0.3, 0],
+    d: [0.8, -0.6, 0],
+  },
+  {
+    name: 'detached surface above floor',
+    mode: 8,
+    p: [0, -0.9, 0],
+    d: [0.6, -0.8, 0],
+  },
+  {
+    name: 'airborne surface above wall top',
+    mode: 7,
+    p: [1.8, 0.9, 0],
+    d: [0.8, 0, 0.6],
+  },
+);
 const make = (size, usage) => device.createBuffer({ size, usage });
 const storage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
 const query = make(fixtures.length * 32, storage);
@@ -206,6 +259,28 @@ near(results[8].distance, chord, 0.002, 'density drop chord');
 assert.equal(results[8].events, 1);
 assert.equal(results[8].complete, 1);
 for (const i of [0, 1, 2, 4, 6]) assert.equal(results[i].complete, 1);
+for (let i = contactStart; i < contactStart + 5; i++) {
+  direction(i, fixtures[i].d);
+  assert.equal(results[i].events, 0, fixtures[i].name);
+  assert.equal(results[i].complete, 1, fixtures[i].name);
+  near(results[i].weight, 1, 1e-6, fixtures[i].name);
+}
+near(
+  results[contactStart + 4].distance,
+  0.14,
+  1e-5,
+  'wet floor includes only the artificial bottom gap',
+);
+for (const [offset, face] of [
+  [5, [-1, 0, 0]],
+  [6, [0, 1, 0]],
+  [7, [-1, 0, 0]],
+]) {
+  const i = contactStart + offset;
+  direction(i, refract(fixtures[i].d, face, 1.333));
+  assert.equal(results[i].events, 1, fixtures[i].name);
+  assert.ok(results[i].weight < 1, fixtures[i].name);
+}
 assert.deepEqual(errors, []);
 console.log(
   'PASS: exit refraction, separated/thin layers, wedge, opaque termination, droplet chord and bounded TIR',

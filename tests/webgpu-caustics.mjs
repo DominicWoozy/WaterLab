@@ -30,7 +30,7 @@ device.queue.writeBuffer(
   new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]),
 );
 const setupTarget = device.createTexture({
-  size: [64, 8],
+  size: [64, 12],
   format: 'rgba8unorm',
   usage: GPUTextureUsage.RENDER_ATTACHMENT,
 });
@@ -74,6 +74,12 @@ const code =
  if(row==4u){let path=traceTransmission(vec3f(x,-.0005,.1),down,true,0u);return vec4f(path.distance,path.weight,0.,1.);}
  if(row==5u){return vec4f(scene(vec3f(0.,2.,0.),down),duckTrace(vec3f(0.,2.,0.),down,2.97).y);}
  if(row==6u){return vec4f(waterColor(vec3f(1.75,0.,0.),-down,normalize(vec3f(1.,-.1,0.)),0u),1.);}
+ if(row>=8u){
+  let starts=array<vec3f,4>(vec3f(1.8,-.3,0.),vec3f(-1.8,-.3,0.),vec3f(0.,-.3,1.3),vec3f(0.,-.3,-1.3));
+  let rays=array<vec3f,4>(vec3f(.5,-.5,sqrt(.5)),vec3f(-.5,-.5,sqrt(.5)),vec3f(sqrt(.5),-.5,.5),vec3f(sqrt(.5),-.5,-.5));
+  let path=traceTransmission(starts[row-8u],rays[row-8u],true,0u);
+  return vec4f(path.direction,f32(path.events));
+ }
  return vec4f(floorLighting(floor),1.);
 }`;
 const shaderModule = device.createShaderModule({ code });
@@ -94,7 +100,7 @@ const pipeline = await device.createRenderPipelineAsync({
   },
 });
 const target = device.createTexture({
-  size: [64, 8],
+  size: [64, 12],
   format: 'rgba32float',
   usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
 });
@@ -124,13 +130,13 @@ async function probe(
   } = {},
 ) {
   const u = new Float32Array(32);
-  u.set([64, 8, 0, time], 16);
+  u.set([64, 12, 0, time], 16);
   u.set([light, +reflection, +on, +particles], 20);
   // Keep the real duck mesh active; the transmission oracle uses rays clear of it.
   u.set([1.15, 1, 0.021, Math.cbrt(0.2)], 28);
   device.queue.writeBuffer(renderer.uniform, 0, u);
   const staging = device.createBuffer({
-    size: 64 * 8 * 16,
+    size: 64 * 12 * 16,
     usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
   });
   encoder = device.createCommandEncoder();
@@ -162,7 +168,7 @@ async function probe(
   encoder.copyTextureToBuffer(
     { texture: target },
     { buffer: staging, bytesPerRow: 1024 },
-    [64, 8],
+    [64, 12],
   );
   device.queue.submit([encoder.finish()]);
   await staging.mapAsync(GPUMapMode.READ);
@@ -213,14 +219,12 @@ for (let x = 0; x < 12; x++)
     const floorDelta = on[x * 4 + k] - off[x * 4 + k];
     const thickness = on[(4 * 64 + x) * 4];
     assert.ok(
-      Math.abs(thickness - 0.9595) < 0.001,
-      'solid field ends at density clipping plane y=-.96',
+      Math.abs(thickness - 0.9695) < 0.001,
+      'wet floor closes the artificial .01 gap to the opaque tile',
     );
     assert.ok(
-      Math.abs(
-        on[(4 * 64 + x) * 4 + 1] - (1 - ((1.333 - 1) / (1.333 + 1)) ** 2),
-      ) < 1e-5,
-      'normal-incidence exit Fresnel',
+      Math.abs(on[(4 * 64 + x) * 4 + 1] - 1) < 1e-5,
+      'opaque floor contact has no water-air exit Fresnel',
     );
     const expected =
       floorDelta *
@@ -232,6 +236,26 @@ for (let x = 0; x < 12; x++)
       Math.abs(actual - expected) < 2e-5,
       'caustic must be transmitted, absorbed and Fresnel weighted like the floor',
     );
+  }
+const contactRays = [
+  [0.5, -0.5, Math.sqrt(0.5)],
+  [-0.5, -0.5, Math.sqrt(0.5)],
+  [Math.sqrt(0.5), -0.5, 0.5],
+  [Math.sqrt(0.5), -0.5, -0.5],
+];
+for (let row = 8; row < 12; row++)
+  for (let x = 0; x < 64; x++) {
+    const offset = (row * 64 + x) * 4;
+    assert.equal(
+      on[offset + 3],
+      0,
+      'all four clipped tank sides must avoid artificial interface events',
+    );
+    for (let k = 0; k < 3; k++)
+      assert.ok(
+        Math.abs(on[offset + k] - contactRays[row - 8][k]) < 1e-5,
+        'tank-side transmission keeps its direction',
+      );
   }
 assert.deepEqual(await probe(true), on, 'paused state must be deterministic');
 const later = await probe(true, { time: 2.7 });
