@@ -5,7 +5,11 @@ import {
   RENDER_PARAMETER_SLOT,
 } from '../app/webgpu/simulation.ts';
 import { WebGPUVolume } from '../app/webgpu/volume.ts';
-import { CAPACITY, NEIGHBOR_CACHE_BASE } from '../app/webgpu/common.ts';
+import {
+  CAPACITY,
+  NEIGHBOR_CACHE_BASE,
+  gridCellCount,
+} from '../app/webgpu/common.ts';
 Object.assign(globalThis, globals);
 const gpu = (globalThis.nativeGPU = create(['backend=metal']));
 const device = await (await gpu.requestAdapter()).requestDevice();
@@ -96,8 +100,8 @@ for (const quality of [70000, 100000, 50000, 100000]) {
   assert.equal(new Set(ids).size, quality);
   assert.equal(Math.max(...ids), quality - 1);
   const grid = new Uint32Array((await read(sim.starts)).buffer);
-  assert.equal(grid[NEIGHBOR_CACHE_BASE - 1], quality);
-  for (let c = 0; c < NEIGHBOR_CACHE_BASE - 1; c++)
+  assert.equal(grid[gridCellCount(quality)], quality);
+  for (let c = 0; c < gridCellCount(quality); c++)
     assert.ok(grid[c] <= grid[c + 1]);
   console.log('initialization, reduction and full step', quality);
 }

@@ -107,9 +107,11 @@ async function harness(backend = 'webgpu') {
     },
     destroy() {},
   };
+  const lightingRevisions = [];
   const renderer = {
     loadModel: async () => {},
-    encode() {
+    encode(...args) {
+      lightingRevisions.push(args[7].lightingRevision);
       trace.push('render');
     },
     destroy() {},
@@ -207,6 +209,7 @@ async function harness(backend = 'webgpu') {
     sim,
     document,
     settings,
+    lightingRevisions,
     trace,
     errors,
     get presented() {
@@ -370,5 +373,36 @@ test('WebGL2 maps unsupported high particle presets to 30k', async () => {
     now += 32;
   }
   assert.deepEqual(h.errors, []);
+  h.engine.destroy();
+});
+
+test('lighting revision follows every reconstructed scene, not display-only frames', async () => {
+  const h = await harness();
+  h.settings.paused = true;
+  await h.frame(16);
+  const first = h.lightingRevisions.at(-1);
+  await h.frame(24);
+  assert.equal(h.lightingRevisions.at(-1), first);
+  h.resize(900, 600);
+  await h.frame(32);
+  assert.equal(h.lightingRevisions.at(-1), first);
+  h.engine.drain();
+  await h.frame(40);
+  assert.equal(h.lightingRevisions.at(-1), first + 1);
+  h.engine.reset();
+  await h.frame(48);
+  assert.equal(h.lightingRevisions.at(-1), first + 2);
+  h.settings.paused = false;
+  await h.frame(68);
+  assert.equal(h.lightingRevisions.at(-1), first + 3);
+  h.settings.particles = true;
+  await h.frame(88);
+  h.settings.paused = true;
+  h.settings.particles = false;
+  await h.frame(96);
+  assert.equal(h.lightingRevisions.at(-1), first + 4);
+  h.settings.details = false;
+  await h.frame(104);
+  assert.equal(h.lightingRevisions.at(-1), first + 5);
   h.engine.destroy();
 });

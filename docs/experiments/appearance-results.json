@@ -1,0 +1,43 @@
+{
+  "filtered": true,
+  "resolution": [512, 320],
+  "results": [
+    {
+      "name": "above",
+      "highlightPixels": 3297,
+      "baselineRMSE": 0.06069463965436843,
+      "aaRMSE": 0.05231238601562308,
+      "referenceEnergy": 157.03346609184115,
+      "baselineEnergy": 152.13326748554923,
+      "aaEnergy": 159.92585894777665,
+      "colorMeanAbsoluteDelta": 0.22042683796890686
+    },
+    {
+      "name": "side",
+      "highlightPixels": 2715,
+      "baselineRMSE": 0.058124178766911845,
+      "aaRMSE": 0.04979958369520915,
+      "referenceEnergy": 118.58854552902373,
+      "baselineEnergy": 119.69695691802649,
+      "aaEnergy": 125.52441855415587,
+      "colorMeanAbsoluteDelta": 0.21786613017938994
+    },
+    {
+      "name": "far",
+      "highlightPixels": 1799,
+      "baselineRMSE": 0.07990034476209497,
+      "aaRMSE": 0.05298061307981481,
+      "referenceEnergy": 63.03065848245446,
+      "baselineEnergy": 66.29683377688896,
+      "aaEnergy": 65.49808338411027,
+      "colorMeanAbsoluteDelta": 0.2186799629668466
+    }
+  ],
+  "surface_gpu_ms": {
+    "baseline": 2.219121777777778,
+    "aa": 2.1899946666666668,
+    "srgb": 2.202737777777779
+  },
+  "images": "docs/experiments/appearance-images (above view retained)",
+  "errors": []
+}

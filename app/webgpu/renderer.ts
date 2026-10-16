@@ -13,6 +13,16 @@ export type Camera = {
 export class WebGPURenderer {
   readonly uniform: GPUBuffer;
   private caustics!: WebGPUCaustics;
+  private lightingCache: {
+    revision: number;
+    sim: WebGPUSimulation;
+    volume: WebGPUVolume;
+    duck: GPUBuffer;
+    count: number;
+    quality: number;
+    light: number;
+    caustics: boolean;
+  } | null = null;
   private surface!: GPURenderPipeline;
   private selfOpticsSurface!: GPURenderPipeline;
   private particles!: GPURenderPipeline;
@@ -230,6 +240,7 @@ export class WebGPURenderer {
     }
     this.surfaceGroups.clear();
     this.caustics.setModel(this.triangles);
+    this.lightingCache = null;
     this.ready = true;
   }
   ready = false;
@@ -248,6 +259,9 @@ export class WebGPURenderer {
       selfShadow?: boolean;
       caustics: boolean;
       particles: boolean;
+      // Opt in only when the caller advances this after every water/duck change.
+      // Omission forces a fresh solve (including standalone GPU experiments).
+      lightingRevision?: number;
       brush?: number[];
     },
   ) {
@@ -307,7 +321,18 @@ export class WebGPURenderer {
     u.set(options.brush ?? [0, -0.25, 0, 0], 24);
     u.set([1.15, +this.ready, 0.021, Math.cbrt(10000 / sim.quality)], 28);
     this.device.queue.writeBuffer(this.uniform, 0, u);
-    if (!options.particles && options.light > 0)
+    const cached = this.lightingCache;
+    const reuseLighting =
+      options.lightingRevision !== undefined &&
+      cached?.revision === options.lightingRevision &&
+      cached.sim === sim &&
+      cached.volume === volume &&
+      cached.duck === sim.duck &&
+      cached.count === sim.count &&
+      cached.quality === sim.quality &&
+      cached.light === options.light &&
+      cached.caustics === options.caustics;
+    if (!options.particles && options.light > 0 && !reuseLighting) {
       this.caustics.encode(
         encoder,
         volume,
@@ -317,6 +342,20 @@ export class WebGPURenderer {
         this.triangles,
         sim.count,
       );
+      this.lightingCache =
+        options.lightingRevision === undefined
+          ? null
+          : {
+              revision: options.lightingRevision,
+              sim,
+              volume,
+              duck: sim.duck,
+              count: sim.count,
+              quality: sim.quality,
+              light: options.light,
+              caustics: options.caustics,
+            };
+    }
     if (volume.detailsEnabled && !options.particles) {
       this.detailGroup ??= this.device.createBindGroup({
         layout: this.detailLayout,

@@ -1,6 +1,7 @@
 import {
   CAPACITY,
   GRID_CELLS,
+  gridCellCount,
   GRID_STORAGE_WORDS,
   WORKGROUP,
 } from './common.ts';
@@ -73,7 +74,7 @@ export class WebGPUSimulation {
     );
     this.counts = alloc('cell counts', GRID_CELLS * 4);
     this.cursor = alloc('cell cursors', GRID_CELLS * 4);
-    this.totals = alloc('block totals', 128 * 4);
+    this.totals = alloc('block totals', 256 * 4);
     this.lambda = alloc('pressure', CAPACITY * 16);
     this.factor = alloc('divergence factors', CAPACITY * 16);
     this.surface = alloc('surface normals and density', CAPACITY * 16);
@@ -233,8 +234,10 @@ export class WebGPUSimulation {
     p = this.parameters[RENDER_PARAMETER_SLOT],
     reorderReactions = false,
   ) {
-    encoder.clearBuffer(this.counts);
-    encoder.clearBuffer(this.cursor);
+    const cells = gridCellCount(this.quality);
+    const blocks = Math.ceil(cells / 256);
+    encoder.clearBuffer(this.counts, 0, cells * 4);
+    encoder.clearBuffer(this.cursor, 0, cells * 4);
     const pass = encoder.beginComputePass({ label: 'count-scan-scatter' });
     this.run(pass, 'count', p, { 2: this.counts });
     this.run(
@@ -242,10 +245,10 @@ export class WebGPUSimulation {
       'scan',
       p,
       { 1: this.counts, 2: this.starts, 3: this.totals },
-      120,
+      blocks,
     );
     this.run(pass, 'scanTotals', p, { 1: this.totals }, 1);
-    this.run(pass, 'add', p, { 1: this.starts, 2: this.totals }, 120);
+    this.run(pass, 'add', p, { 1: this.starts, 2: this.totals }, blocks);
     if (reorderReactions) {
       this.run(pass, 'scatterReactions', p, {
         3: this.starts,

@@ -37,13 +37,14 @@ const input = {
   forces: { gravity: 0, viscosity: 0.025, agitation: 0 },
   surfaceTension: false,
 };
-const h = Math.fround(0.17 * Math.fround(Math.cbrt(0.2)));
+const quality = Number(process.env.QUALITY || 50000);
+const h = Math.fround(0.17 * Math.fround(Math.cbrt(10000 / quality)));
 for (const [name, spacing] of [
   ['sparse', 0.071],
   ['overflow', 0.006],
 ]) {
   let encoder = device.createCommandEncoder();
-  sim.reset(encoder, 50000);
+  sim.reset(encoder, quality);
   device.queue.submit([encoder.finish()]);
   const n = 513;
   sim.count = n;
@@ -258,7 +259,8 @@ for (const [name, spacing] of [
           delta[k] -= (pressures[i * 4] + pressures[j * 4]) * gradient[k];
       const limiter = Math.min(
         1,
-        (0.017 * Math.cbrt(0.2)) / Math.max(Math.hypot(...delta), 1e-8),
+        (0.017 * Math.cbrt(10000 / quality)) /
+          Math.max(Math.hypot(...delta), 1e-8),
       );
       for (let k = 0; k < 3; k++)
         assert.ok(

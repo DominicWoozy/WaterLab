@@ -52,6 +52,7 @@ export async function createWebGPUWater(
     pendingPour = 0,
     shakeUntil = 0,
     dirty = true,
+    lightingRevision = 0,
     needsReset = true,
     inFlight = 0;
   let resizePending = true;
@@ -252,6 +253,9 @@ export async function createWebGPUWater(
       if (dirty && !s.particles) {
         encoder = device.createCommandEncoder({ label: 'WaterLab density' });
         volume.encode(encoder, sim, s.details, stepped);
+        // World-space light transport depends on this field and the duck pose,
+        // not the camera or display rate. Never reuse across a physical tick.
+        lightingRevision++;
         commands.push(encoder.finish());
         dirty = false;
       }
@@ -271,6 +275,7 @@ export async function createWebGPUWater(
           selfShadow: s.selfShadow,
           caustics: s.caustics,
           particles: s.particles,
+          lightingRevision,
           brush: pointer && !pointer.orbit ? [...pointer.world, 1] : undefined,
         },
       );

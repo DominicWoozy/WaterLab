@@ -17,23 +17,24 @@ export const gridShaders: Record<string, string> = {
  @group(0) @binding(3) var<storage,read_write> totals:array<u32>;
  var<workgroup> scratch:array<u32,256>;
  @compute @workgroup_size(256) fn main(@builtin(global_invocation_id) gid:vec3u,@builtin(local_invocation_index) lane:u32,@builtin(workgroup_id) group:vec3u){
-  scratch[lane]=counts[gid.x];workgroupBarrier();
+  var count=0u;if(gid.x<gridCells()){count=counts[gid.x];}
+  scratch[lane]=count;workgroupBarrier();
   for(var stride=1u;stride<256u;stride*=2u){
    var v=scratch[lane];if(lane>=stride){v+=scratch[lane-stride];}workgroupBarrier();
    scratch[lane]=v;workgroupBarrier();
   }
-  starts[gid.x]=scratch[lane]-counts[gid.x];
+  if(gid.x<gridCells()){starts[gid.x]=scratch[lane]-count;}
   if(lane==255u){totals[group.x]=scratch[lane];}
  }`,
   scanTotals:
     common +
     /* wgsl */ `
  @group(0) @binding(1) var<storage,read_write> totals:array<u32>;
- var<workgroup> scratch:array<u32,128>;
- @compute @workgroup_size(128) fn main(@builtin(local_invocation_index) lane:u32){
-  var value=0u;if(lane<120u){value=totals[lane];}scratch[lane]=value;workgroupBarrier();
-  for(var stride=1u;stride<128u;stride*=2u){var v=scratch[lane];if(lane>=stride){v+=scratch[lane-stride];}workgroupBarrier();scratch[lane]=v;workgroupBarrier();}
-  if(lane<120u){totals[lane]=scratch[lane]-value;}
+ var<workgroup> scratch:array<u32,256>;
+ @compute @workgroup_size(256) fn main(@builtin(local_invocation_index) lane:u32){
+  var value=0u;if(lane<(gridCells()+255u)/256u){value=totals[lane];}scratch[lane]=value;workgroupBarrier();
+  for(var stride=1u;stride<256u;stride*=2u){var v=scratch[lane];if(lane>=stride){v+=scratch[lane-stride];}workgroupBarrier();scratch[lane]=v;workgroupBarrier();}
+  if(lane<(gridCells()+255u)/256u){totals[lane]=scratch[lane]-value;}
  }`,
   add:
     common +
@@ -41,8 +42,8 @@ export const gridShaders: Record<string, string> = {
  @group(0) @binding(1) var<storage,read_write> starts:array<u32>;
  @group(0) @binding(2) var<storage,read> totals:array<u32>;
  @compute @workgroup_size(256) fn main(@builtin(global_invocation_id) gid:vec3u){
-  if(gid.x<30720u){starts[gid.x]+=totals[gid.x/256u];}
-  if(gid.x==0u){starts[30720]=P.counts.x;}
+  if(gid.x<gridCells()){starts[gid.x]+=totals[gid.x/256u];}
+  if(gid.x==0u){starts[gridCells()]=P.counts.x;}
  }`,
   scatter:
     common +
@@ -83,7 +84,7 @@ gridShaders.prepareVelocity =
  @group(0) @binding(8) var<storage,read_write> surface:array<vec4f>;
  @compute @workgroup_size(128) fn main(@builtin(global_invocation_id) gid:vec3u){
   let i=gid.x;if(i>=P.counts.x){return;}let p=input[i].pos.xyz;
-  let radius=h()+.00001*P.clock.z;let radius2=radius*radius;let size=cellSize();
+  let radius=h()+.00001*P.clock.z;let radius2=radius*radius;let size=cellSize();let dims=gridDims();
   let lo=cell(p-vec3f(radius));let hi=cell(p+vec3f(radius));var count=0u;
   let wall=wallSupport(p)+duckSupport(p,duck);var rho=wall.w;var sum=0.;var nearby=0.;var grad=wall.xyz;
   for(var z=lo.z;z<=hi.z;z++){
@@ -92,9 +93,9 @@ gridShaders.prepareVelocity =
     let gap=max(max(tile-p.yz,p.yz-tile-vec2f(size)),vec2f(0.));
     let remaining=radius2-dot(gap,gap);if(remaining<0.){continue;}
     let extent=sqrt(remaining)+.00001*P.clock.z;
-    let x0=clamp(i32(floor((p.x-extent+2.04)/size)),0,31);
-    let x1=clamp(i32(floor((p.x+extent+2.04)/size)),0,31);
-    let row=32*(y+40*z);let begin=starts[u32(row+x0)];let end=starts[u32(row+x1+1)];
+    let x0=clamp(i32(floor((p.x-extent+2.04)/size)),0,dims.x-1);
+    let x1=clamp(i32(floor((p.x+extent+2.04)/size)),0,dims.x-1);
+    let row=dims.x*(y+dims.y*z);let begin=starts[u32(row+x0)];let end=starts[u32(row+x1+1)];
     for(var j=begin;j<end;j++){
      if(j==i){continue;}let diff=p-input[j].pos.xyz;let r2=dot(diff,diff);
      if(r2>=h()*h()||r2<1e-12){continue;}

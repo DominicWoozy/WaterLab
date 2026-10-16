@@ -1,5 +1,18 @@
 export const CAPACITY = 100000;
-export const GRID_CELLS = 32 * 40 * 24;
+// Reserve the largest grid; active dimensions follow the physical kernel scale.
+export function gridDimensions(
+  quality: number,
+): readonly [number, number, number] {
+  return quality > 70000
+    ? [41, 51, 31]
+    : quality > 50000
+      ? [36, 45, 27]
+      : [32, 40, 24];
+}
+export function gridCellCount(quality: number) {
+  return gridDimensions(quality).reduce((a, b) => a * b, 1);
+}
+export const GRID_CELLS = gridCellCount(CAPACITY);
 export const WORKGROUP = 128;
 export const NEIGHBOR_CACHE_SIZE = 96;
 export const NEIGHBOR_CACHE_BASE = GRID_CELLS + 1;
@@ -27,11 +40,17 @@ fn h()->f32 {return .17*P.clock.z;}
 fn particleMass()->f32 {return (2.*3.14159265/15.)*h()*h()*h()/REST;}
 fn limited(v:vec3f,m:f32)->vec3f {return v*min(1.,m/max(length(v),.000001));}
 fn bound(p:vec3f)->vec3f {return clamp(p,vec3f(-1.78,-.917,-1.28),vec3f(1.78,3.8,1.28));}
-// Keep the full container inside the fixed grid at higher particle resolutions.
-// This changes only candidate partitioning; h() still shrinks with particle mass.
-fn cellSize()->f32 {return .225*max(P.clock.z,0.5848035476425733);}
-fn cell(p:vec3f)->vec3i {return clamp(vec3i(floor((p-vec3f(-2.04,-1.19,-1.53))/cellSize())),vec3i(0),vec3i(31,39,23));}
-fn key(c:vec3i)->u32 {return u32(c.x+32*(c.y+40*c.z));}
+// Preserve the h + one pressure-correction search margin at every resolution.
+// More cells cover the same world-space domain at 70k/100k.
+fn gridDims()->vec3i {
+ if(P.counts.y>70000u){return vec3i(41,51,31);}
+ if(P.counts.y>50000u){return vec3i(36,45,27);}
+ return vec3i(32,40,24);
+}
+fn gridCells()->u32 {let d=gridDims();return u32(d.x*d.y*d.z);}
+fn cellSize()->f32 {return .225*P.clock.z;}
+fn cell(p:vec3f)->vec3i {return clamp(vec3i(floor((p-vec3f(-2.04,-1.19,-1.53))/cellSize())),vec3i(0),gridDims()-vec3i(1));}
+fn key(c:vec3i)->u32 {let d=gridDims();return u32(c.x+d.x*(c.y+d.y*c.z));}
 fn qrotate(q:vec4f,v:vec3f)->vec3f {return v+2.*cross(q.xyz,cross(q.xyz,v)+q.w*v);}
 fn conjugate(q:vec4f)->vec4f {return vec4f(-q.xyz,q.w);}
 fn wallSupport(p:vec3f)->vec4f {
@@ -71,10 +90,10 @@ fn inverseInertia(t:vec3f,q:vec4f)->vec3f {return qrotate(q,qrotate(conjugate(q)
 // at each neighbor query, at most one .042*scale pressure/contact shift is outstanding.
 export function neighbors(body: string) {
   return /* wgsl */ `
- let base=cell(p);let reach=1;
- for(var dz=-reach;dz<=reach;dz++){let z=base.z+dz;if(z<0||z>=24){continue;}
-  for(var dy=-reach;dy<=reach;dy++){let y=base.y+dy;if(y<0||y>=40){continue;}
-   let x0=max(0,base.x-reach);let x1=min(31,base.x+reach);let row=32*(y+40*z);
+ let base=cell(p);let reach=1;let dims=gridDims();
+ for(var dz=-reach;dz<=reach;dz++){let z=base.z+dz;if(z<0||z>=dims.z){continue;}
+  for(var dy=-reach;dy<=reach;dy++){let y=base.y+dy;if(y<0||y>=dims.y){continue;}
+   let x0=max(0,base.x-reach);let x1=min(dims.x-1,base.x+reach);let row=dims.x*(y+dims.y*z);
    let start=starts[u32(row+x0)];let end=starts[u32(row+x1+1)];
    for(var j=start;j<end;j++){
     if(j==i){continue;}let diff=p-input[j].pos.xyz;let r2=dot(diff,diff);
